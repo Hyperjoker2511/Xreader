@@ -330,6 +330,10 @@ fun AiSheetContent(
     }
 }
 
+@OptIn(
+    androidx.compose.material3
+        .ExperimentalMaterial3ExpressiveApi::class
+)
 @Composable
 private fun ActionRow(
     icon: ImageVector,
@@ -362,7 +366,17 @@ private fun ActionRow(
             )
         }
         if (busy) {
-            CircularProgressIndicator(Modifier.padding(end = 8.dp))
+            // Code 128 (audit X4): the busy state wears the
+            // face's loading language — the M3 LoadingIndicator
+            // in the Material 3 face, the plain spinner in
+            // Nocturne.
+            if (app.xreader.ui.theme.isM3FamilyDesign()) {
+                androidx.compose.material3.LoadingIndicator(
+                    Modifier.padding(end = 8.dp)
+                )
+            } else {
+                CircularProgressIndicator(Modifier.padding(end = 8.dp))
+            }
         } else {
             TextButton(onClick = onClick) { Text("Run") }
         }

@@ -215,7 +215,14 @@ object LaunchIntroShown {
 fun LaunchIntro(
     libraryReady: Boolean,
     animationsEnabled: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    // Code 128 (F-B): the caller (MainActivity) gates the app
+    // on this intro — it composes the intro above the shell
+    // until the intro reports itself settled on one of its
+    // terminal paths (shown and dismissed, refused at begin,
+    // or the once-claim lost to another composition), then
+    // stops composing it entirely.
+    onSettled: () -> Unit = {}
 ) {
     val controller = remember { LaunchIntroController() }
     // Mounted from the FIRST frame when the intro is eligible, so
@@ -244,6 +251,7 @@ fun LaunchIntro(
         )
         if (!began) {
             mounted = false
+            onSettled()
             return@LaunchedEffect
         }
         if (!LaunchIntroShown.markShown()) {
@@ -251,6 +259,7 @@ fun LaunchIntro(
             // the intro first — stand down rather than double-show.
             controller.dismiss()
             mounted = false
+            onSettled()
             return@LaunchedEffect
         }
         mounted = true
@@ -264,6 +273,7 @@ fun LaunchIntro(
         exiting = true
         delay(FADE_MS.toLong())
         mounted = false
+        onSettled()
     }
     // The Library is ready: latch it, and deliver the
     // dismissal once the enter animation has completed too

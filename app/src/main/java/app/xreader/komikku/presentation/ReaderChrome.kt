@@ -103,6 +103,37 @@ private fun readerBarColor(): Color =
     app.xreader.ui.theme.LocalGlassSettings.current
         .glassSurface(MaterialTheme.colorScheme.surface)
 
+/**
+ * Code 128 (audit F7): the bars' construction — the
+ * LocalReaderChrome pattern (glass surface, a shaped bar
+ * with a hairline border and elevation), not the donor's
+ * flat full-width slab. 127 re-tinted the slab's colour to
+ * the glass tint but left the slab: no shape, no border,
+ * no accent. The bars stay docked in the donor's layout
+ * slots (floating them would be a layout change, not a
+ * re-dress); the shape, border and the violet active
+ * states below are the face's chrome language arriving.
+ * The vertical scrubber deliberately keeps NO surface —
+ * its band-less rail is the shipped I1 form.
+ */
+@Composable
+private fun ReaderBarSurface(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    Surface(
+        color = readerBarColor(),
+        shape = androidx.compose.foundation.shape
+            .RoundedCornerShape(24.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outlineVariant
+        ),
+        shadowElevation = 4.dp,
+        modifier = modifier,
+        content = content
+    )
+}
+
 // ------------------------------------------------------------ top bar
 
 /** Donor ReaderTopBar: back, manga + chapter titles, and the
@@ -115,7 +146,7 @@ fun ReaderTopBar(
     onBack: () -> Unit,
     onToggleBookmark: () -> Unit
 ) {
-    Surface(color = readerBarColor()) {
+    ReaderBarSurface {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -150,7 +181,13 @@ fun ReaderTopBar(
                 Icon(
                     if (chapterBookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
                     if (chapterBookmarked) "Remove chapter bookmark" else "Bookmark chapter",
-                    tint = MaterialTheme.colorScheme.onSurface
+                    // Code 128 (audit F7): the active state
+                    // takes the face's violet.
+                    tint = if (chapterBookmarked) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
                 )
             }
         }
@@ -178,7 +215,7 @@ fun ChapterNavigator(
     var sliderValue by remember(currentPage) {
         mutableFloatStateOf((currentPage + 1).toFloat())
     }
-    Surface(color = readerBarColor(), modifier = modifier.fillMaxWidth()) {
+    ReaderBarSurface(modifier = modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -203,7 +240,20 @@ fun ChapterNavigator(
                 onValueChangeFinished = { onSeekPage(sliderValue.toInt() - 1) },
                 valueRange = 1f..totalPages.toFloat(),
                 steps = (totalPages - 2).coerceAtLeast(0),
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f),
+                // Code 128 (audit F7): the kit's accent
+                // treatment — violet thumb and track (the
+                // CustomiseSlider colours), not the bare
+                // stock slider.
+                colors = androidx.compose.material3
+                    .SliderDefaults.colors(
+                        thumbColor = MaterialTheme.colorScheme
+                            .primary,
+                        activeTrackColor = MaterialTheme
+                            .colorScheme.primary,
+                        inactiveTrackColor = MaterialTheme
+                            .colorScheme.surfaceContainerHighest
+                    )
             )
             Text(
                 "$totalPages",
@@ -384,7 +434,7 @@ fun ReaderBottomBar(
     onToggleExhUtils: () -> Unit,
     onSettings: () -> Unit
 ) {
-    Surface(color = readerBarColor()) {
+    ReaderBarSurface {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -423,7 +473,13 @@ fun ReaderBottomBar(
                     Icon(
                         if (cropBordersActive) Icons.Filled.CropFree else Icons.Filled.Crop,
                         "Crop borders",
-                        tint = MaterialTheme.colorScheme.onSurface
+                        // Code 128 (audit F7): the active
+                        // state takes the face's violet.
+                        tint = if (cropBordersActive) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurface
+                        }
                     )
                 }
             }
@@ -459,7 +515,7 @@ fun ExhUtilsStrip(
     onBoostPage: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(color = readerBarColor(), modifier = modifier.fillMaxWidth()) {
+    ReaderBarSurface(modifier = modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -472,7 +528,13 @@ fun ExhUtilsStrip(
                     } else {
                         "Auto-scroll"
                     },
-                    color = MaterialTheme.colorScheme.onSurface
+                    // Code 128 (audit F7): the on state
+                    // takes the face's violet.
+                    color = if (autoScrollOn) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurface
+                    }
                 )
             }
             androidx.compose.material3.TextButton(onClick = onRetryAll) {

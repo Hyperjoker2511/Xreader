@@ -1231,6 +1231,10 @@ private fun LoreGridTab(
 /** R11 list: entities as compact rows — name + type +
  * one-line description, with the art and remove doors as
  * icon buttons on the row. Tap opens the editor. */
+@OptIn(
+    androidx.compose.material3
+        .ExperimentalMaterial3ExpressiveApi::class
+)
 @Composable
 private fun LoreListTab(
     state: LoreUiState,
@@ -1292,10 +1296,20 @@ private fun LoreListTab(
                         )
                     }
                     if (state.artBusyFor == entity.id) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp
-                        )
+                        // Code 128 (audit X4): the art-busy state
+                        // wears the face's loading language —
+                        // the M3 LoadingIndicator in the Material
+                        // 3 face, the plain spinner in Nocturne.
+                        if (app.xreader.ui.theme.isEditorialDesign()) {
+                            androidx.compose.material3.LoadingIndicator(
+                                modifier = Modifier.size(24.dp)
+                            )
+                        } else {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp
+                            )
+                        }
                     } else {
                         IconButton(
                             onClick = {
@@ -1457,8 +1471,11 @@ private fun M3LoreContent(
                             label = { Text(engineLabel) }
                         )
                         if (state.building) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp)
+                            // Code 128 (audit X4): the face's
+                            // loading language, not a bare
+                            // spinner, in the M3 build row.
+                            androidx.compose.material3.LoadingIndicator(
+                                modifier = Modifier.size(24.dp)
                             )
                             Text(
                                 state.buildProgress.ifBlank {

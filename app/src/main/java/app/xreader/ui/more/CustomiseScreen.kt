@@ -52,7 +52,6 @@ import androidx.compose.material.icons.filled.FormatSize
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -1157,32 +1156,41 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             // FlowRow — fixed Rows crushed long labels ("Book page
             // + reader controls") on narrow screens; wrapping rows
             // can never crush.
+            // Code 128 (audit F5): EVERY chip row in this
+            // Nocturne hub is the kit chip now — the stock
+            // FilterChips 127 left standing across the hub's
+            // pages (Theme mode here, Library layout, cover
+            // size, Bottom bar, Tab labels, Indicator style
+            // and their kin rows) are NocturneChips, and the
+            // bare sliders carry the CustomiseSlider colours.
+            // (The M3 face never reaches this code — it takes
+            // M3CustomisePage at this screen's head.)
             Text("Theme mode", style = MaterialTheme.typography.bodyLarge)
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.themeMode ==
                         app.xreader.data.prefs.ThemeMode.FOLLOW_SYSTEM,
                     onClick = {
                         viewModel.setThemeMode(app.xreader.data.prefs.ThemeMode.FOLLOW_SYSTEM)
                     },
-                    label = { Text("System") }
+                    label = "System"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.themeMode == app.xreader.data.prefs.ThemeMode.LIGHT,
                     onClick = {
                         viewModel.setThemeMode(app.xreader.data.prefs.ThemeMode.LIGHT)
                     },
-                    label = { Text("Light") }
+                    label = "Light"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.themeMode == app.xreader.data.prefs.ThemeMode.DARK,
                     onClick = {
                         viewModel.setThemeMode(app.xreader.data.prefs.ThemeMode.DARK)
                     },
-                    label = { Text("Dark") }
+                    label = "Dark"
                 )
             }
             // Wallpaper colours (R04, Material You): API 31+ only —
@@ -1454,16 +1462,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     app.xreader.data.prefs.SchemeFlavour.entries.forEach { flavour ->
-                        FilterChip(
+                        app.xreader.ui.common.NocturneChip(
                             selected = selectedCustom.flavour == flavour,
                             onClick = {
                                 viewModel.setCustomSchemeFlavour(
                                     selectedCustom.id, flavour
                                 )
                             },
-                            label = {
-                                Text(
-                                    when (flavour) {
+                            label = when (flavour) {
                                         app.xreader.data.prefs.SchemeFlavour.TONAL ->
                                             "Tonal"
                                         app.xreader.data.prefs.SchemeFlavour.VIBRANT ->
@@ -1475,8 +1481,6 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                                         app.xreader.data.prefs.SchemeFlavour.MONO ->
                                             "Mono"
                                     }
-                                )
-                            }
                         )
                     }
                 }
@@ -1529,7 +1533,20 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     value = appearance.appSize,
                     onValueChange = { viewModel.setAppSize(it) },
                     valueRange = AppearanceValidation.APP_SIZE_RANGE,
-                    steps = 11
+                    steps = 11,
+                    // Code 128 (audit F5): the kit's slider
+                    // colours — the CustomiseSlider treatment
+                    // (accent thumb/track), not the bare
+                    // stock slider.
+                    colors = androidx.compose.material3
+                        .SliderDefaults.colors(
+                            thumbColor = MaterialTheme
+                                .colorScheme.primary,
+                            activeTrackColor = MaterialTheme
+                                .colorScheme.primary,
+                            inactiveTrackColor = MaterialTheme
+                                .colorScheme.surfaceContainerHighest
+                        )
                 )
             }
             Text(
@@ -1744,20 +1761,20 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.layout == LibraryLayout.GRID,
                     onClick = { viewModel.setLayout(LibraryLayout.GRID) },
-                    label = { Text("Grid") }
+                    label = "Grid"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.layout == LibraryLayout.COMFORTABLE_LIST,
                     onClick = { viewModel.setLayout(LibraryLayout.COMFORTABLE_LIST) },
-                    label = { Text("Comfortable list") }
+                    label = "Comfortable list"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.layout == LibraryLayout.COMPACT_LIST,
                     onClick = { viewModel.setLayout(LibraryLayout.COMPACT_LIST) },
-                    label = { Text("Compact list") }
+                    label = "Compact list"
                 )
             }
             if (library.layout == LibraryLayout.GRID) {
@@ -1788,17 +1805,17 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = library.gridColumnsAuto,
                         onClick = { viewModel.clearGridColumns() },
-                        label = { Text("Auto ($autoColumns)") }
+                        label = "Auto ($autoColumns)"
                     )
                     listOf(2, 3, 4).forEach { columns ->
-                        FilterChip(
+                        app.xreader.ui.common.NocturneChip(
                             selected = !library.gridColumnsAuto &&
                                 library.gridColumns == columns,
                             onClick = { viewModel.setGridColumns(columns) },
-                            label = { Text("$columns") }
+                            label = "$columns"
                         )
                     }
                 }
@@ -1813,25 +1830,25 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = library.coverSize == CoverSize.FOLLOW_APP,
                         onClick = { viewModel.setCoverSize(CoverSize.FOLLOW_APP) },
-                        label = { Text("Follow app size") }
+                        label = "Follow app size"
                     )
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = library.coverSize == CoverSize.SMALL,
                         onClick = { viewModel.setCoverSize(CoverSize.SMALL) },
-                        label = { Text("Small") }
+                        label = "Small"
                     )
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = library.coverSize == CoverSize.NORMAL,
                         onClick = { viewModel.setCoverSize(CoverSize.NORMAL) },
-                        label = { Text("Normal") }
+                        label = "Normal"
                     )
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = library.coverSize == CoverSize.LARGE,
                         onClick = { viewModel.setCoverSize(CoverSize.LARGE) },
-                        label = { Text("Large") }
+                        label = "Large"
                     )
                 }
                 Text(
@@ -1861,15 +1878,15 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navBarStyle == NavBarStyle.FLOATING_PILL,
                     onClick = { viewModel.setNavBarStyle(NavBarStyle.FLOATING_PILL) },
-                    label = { Text("Floating pill") }
+                    label = "Floating pill"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navBarStyle == NavBarStyle.DOCKED_BAR,
                     onClick = { viewModel.setNavBarStyle(NavBarStyle.DOCKED_BAR) },
-                    label = { Text("Docked bar") }
+                    label = "Docked bar"
                 )
             }
             Text("Tab labels", style = MaterialTheme.typography.bodyLarge)
@@ -1877,20 +1894,20 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.tabLabelStyle == TabLabelStyle.ALWAYS,
                     onClick = { viewModel.setTabLabelStyle(TabLabelStyle.ALWAYS) },
-                    label = { Text("Always") }
+                    label = "Always"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.tabLabelStyle == TabLabelStyle.SELECTED_ONLY,
                     onClick = { viewModel.setTabLabelStyle(TabLabelStyle.SELECTED_ONLY) },
-                    label = { Text("Selected only") }
+                    label = "Selected only"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.tabLabelStyle == TabLabelStyle.ICONS_ONLY,
                     onClick = { viewModel.setTabLabelStyle(TabLabelStyle.ICONS_ONLY) },
-                    label = { Text("Icons only") }
+                    label = "Icons only"
                 )
             }
             Text("Start screen", style = MaterialTheme.typography.bodyLarge)
@@ -1898,20 +1915,20 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.startScreen == StartScreen.LIBRARY,
                     onClick = { viewModel.setStartScreen(StartScreen.LIBRARY) },
-                    label = { Text("Library") }
+                    label = "Library"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.startScreen == StartScreen.CONTINUE_READING,
                     onClick = { viewModel.setStartScreen(StartScreen.CONTINUE_READING) },
-                    label = { Text("Continue reading") }
+                    label = "Continue reading"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.startScreen == StartScreen.DOWNLOADS,
                     onClick = { viewModel.setStartScreen(StartScreen.DOWNLOADS) },
-                    label = { Text("Downloads") }
+                    label = "Downloads"
                 )
             }
             // Nav-bar styles (v1.6.2): the indicator's style
@@ -1958,7 +1975,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.GOOEY,
                     onClick = {
@@ -1966,9 +1983,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.GOOEY
                         )
                     },
-                    label = { Text("Gooey") }
+                    label = "Gooey"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.WORM,
                     onClick = {
@@ -1976,9 +1993,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.WORM
                         )
                     },
-                    label = { Text("Worm") }
+                    label = "Worm"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.LENS,
                     onClick = {
@@ -1986,9 +2003,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.LENS
                         )
                     },
-                    label = { Text("Liquid lens") }
+                    label = "Liquid lens"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.SLIDE,
                     onClick = {
@@ -1996,9 +2013,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.SLIDE
                         )
                     },
-                    label = { Text("Slide") }
+                    label = "Slide"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.BUBBLE,
                     onClick = {
@@ -2006,9 +2023,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.BUBBLE
                         )
                     },
-                    label = { Text("Bubble") }
+                    label = "Bubble"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.NOTCH,
                     onClick = {
@@ -2016,9 +2033,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.NOTCH
                         )
                     },
-                    label = { Text("Notch") }
+                    label = "Notch"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.EXPANDING,
                     onClick = {
@@ -2026,9 +2043,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.EXPANDING
                         )
                     },
-                    label = { Text("Expanding") }
+                    label = "Expanding"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.SEGMENTED,
                     onClick = {
@@ -2036,9 +2053,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.SEGMENTED
                         )
                     },
-                    label = { Text("Segmented") }
+                    label = "Segmented"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.SQUIRCLE,
                     onClick = {
@@ -2046,9 +2063,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.SQUIRCLE
                         )
                     },
-                    label = { Text("Square") }
+                    label = "Square"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.RING,
                     onClick = {
@@ -2056,9 +2073,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.RING
                         )
                     },
-                    label = { Text("Ring") }
+                    label = "Ring"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.DOT,
                     onClick = {
@@ -2066,9 +2083,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.DOT
                         )
                     },
-                    label = { Text("Dot") }
+                    label = "Dot"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.TOPLINE,
                     onClick = {
@@ -2076,9 +2093,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.TOPLINE
                         )
                     },
-                    label = { Text("Top line") }
+                    label = "Top line"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.GLOW,
                     onClick = {
@@ -2086,9 +2103,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.GLOW
                         )
                     },
-                    label = { Text("Glow") }
+                    label = "Glow"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.MINIMAL,
                     onClick = {
@@ -2096,9 +2113,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.MINIMAL
                         )
                     },
-                    label = { Text("Minimal") }
+                    label = "Minimal"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.FLASHY,
                     onClick = {
@@ -2106,9 +2123,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.FLASHY
                         )
                     },
-                    label = { Text("Flashy") }
+                    label = "Flashy"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.PLAIN,
                     onClick = {
@@ -2116,7 +2133,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.PLAIN
                         )
                     },
-                    label = { Text("Plain") }
+                    label = "Plain"
                 )
                 // WAVE (travel-choreography round,
                 // SPEC-NAV-TRAVEL-WAVE-2026-11-16 §C): the
@@ -2124,7 +2141,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 // enum value — the bar's top edge dips and the
                 // selected icon rides in a circle cradled in
                 // the dip.
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorStyle ==
                         app.xreader.data.library.NavIndicatorStyle.WAVE,
                     onClick = {
@@ -2132,7 +2149,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.library.NavIndicatorStyle.WAVE
                         )
                     },
-                    label = { Text("Wave") }
+                    label = "Wave"
                 )
             }
             Text("Indicator colour", style = MaterialTheme.typography.bodyLarge)
@@ -2141,29 +2158,24 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = library.navIndicatorColourMode ==
                         app.xreader.data.library.NavIndicatorColourMode.THEME,
                     onClick = { viewModel.setNavIndicatorColourTheme() },
-                    label = { Text("Theme") }
+                    label = "Theme"
                 )
-                FilterChip(
+                // Code 128 (audit F5): the kit chip — its
+                // colour rides the chip's own dotColor slot
+                // (the kit's swatch), where the stock
+                // FilterChip carried it as a leading icon.
+                app.xreader.ui.common.NocturneChip(
+                    label = "Custom…",
                     selected = library.navIndicatorColourMode ==
                         app.xreader.data.library.NavIndicatorColourMode.CUSTOM,
-                    onClick = { indicatorWheelOpen = true },
-                    label = { Text("Custom…") },
-                    leadingIcon = {
-                        Box(
-                            Modifier
-                                .size(14.dp)
-                                .clip(androidx.compose.foundation.shape.CircleShape)
-                                .background(
-                                    Color(
-                                        library.navIndicatorColourArgb.toInt()
-                                    )
-                                )
-                        )
-                    }
+                    dotColor = Color(
+                        library.navIndicatorColourArgb.toInt()
+                    ),
+                    onClick = { indicatorWheelOpen = true }
                 )
             }
             if (indicatorWheelOpen) {
@@ -2258,25 +2270,25 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = reader.tapZoneLayout == TapZoneLayout.STANDARD,
                     onClick = { viewModel.updateReader { it.copy(tapZoneLayout = TapZoneLayout.STANDARD) } },
-                    label = { Text("Standard") }
+                    label = "Standard"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = reader.tapZoneLayout == TapZoneLayout.REVERSED,
                     onClick = { viewModel.updateReader { it.copy(tapZoneLayout = TapZoneLayout.REVERSED) } },
-                    label = { Text("Reversed") }
+                    label = "Reversed"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = reader.tapZoneLayout == TapZoneLayout.NINE_ZONE,
                     onClick = { viewModel.updateReader { it.copy(tapZoneLayout = TapZoneLayout.NINE_ZONE) } },
-                    label = { Text("Nine-zone") }
+                    label = "Nine-zone"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = reader.tapZoneLayout == TapZoneLayout.OFF,
                     onClick = { viewModel.updateReader { it.copy(tapZoneLayout = TapZoneLayout.OFF) } },
-                    label = { Text("Off") }
+                    label = "Off"
                 )
             }
             Text("Page order", style = MaterialTheme.typography.bodyLarge)
@@ -2284,15 +2296,15 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = reader.pagedDirection == PagedDirection.LTR,
                     onClick = { viewModel.updateReader { it.copy(pagedDirection = PagedDirection.LTR) } },
-                    label = { Text("Left to right") }
+                    label = "Left to right"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = reader.pagedDirection == PagedDirection.RTL,
                     onClick = { viewModel.updateReader { it.copy(pagedDirection = PagedDirection.RTL) } },
-                    label = { Text("Right to left") }
+                    label = "Right to left"
                 )
             }
             // Manga programme (M2b) + v1.5.0 (Part C — the
@@ -2308,14 +2320,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 for (option in ImageReaderMode.entries) {
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = reader.imageMode == option,
                         onClick = {
                             viewModel.updateReader {
                                 it.copy(imageMode = option)
                             }
                         },
-                        label = { Text(option.label) }
+                        label = option.label
                     )
                 }
             }
@@ -2336,15 +2348,15 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = state.cbzOpensInKomikku,
                     onClick = { viewModel.setCbzOpensInKomikku(true) },
-                    label = { Text("Komikku") }
+                    label = "Komikku"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = !state.cbzOpensInKomikku,
                     onClick = { viewModel.setCbzOpensInKomikku(false) },
-                    label = { Text("Book reader") }
+                    label = "Book reader"
                 )
             }
             Text(
@@ -2461,14 +2473,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 for (option in app.xreader.domain.reader.MangaTapLayout.entries) {
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = reader.mangaTapLayout == option,
                         onClick = {
                             viewModel.updateReader {
                                 it.copy(mangaTapLayout = option)
                             }
                         },
-                        label = { Text(option.label) }
+                        label = option.label
                     )
                 }
             }
@@ -2478,14 +2490,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 for (option in app.xreader.domain.reader.TapInvert.entries) {
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = reader.mangaTapInvert == option,
                         onClick = {
                             viewModel.updateReader {
                                 it.copy(mangaTapInvert = option)
                             }
                         },
-                        label = { Text(option.label) }
+                        label = option.label
                     )
                 }
             }
@@ -2591,14 +2603,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                         "Dim" to 0x40000000L
                     )
                     for ((name, argb) in tints) {
-                        FilterChip(
+                        app.xreader.ui.common.NocturneChip(
                             selected = reader.mangaColorFilterArgb == argb,
                             onClick = {
                                 viewModel.updateReader {
                                     it.copy(mangaColorFilterArgb = argb)
                                 }
                             },
-                            label = { Text(name) }
+                            label = name
                         )
                     }
                 }
@@ -2619,14 +2631,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 for (option in app.xreader.domain.reader.MangaScaleType.entries) {
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = reader.mangaScaleType == option,
                         onClick = {
                             viewModel.updateReader {
                                 it.copy(mangaScaleType = option)
                             }
                         },
-                        label = { Text(option.label) }
+                        label = option.label
                     )
                 }
             }
@@ -2636,14 +2648,14 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 for (option in app.xreader.domain.reader.MangaOrientation.entries) {
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = reader.mangaOrientation == option,
                         onClick = {
                             viewModel.updateReader {
                                 it.copy(mangaOrientation = option)
                             }
                         },
-                        label = { Text(option.label) }
+                        label = option.label
                     )
                 }
             }
@@ -2708,7 +2720,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.bookColours ==
                         app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY,
                     onClick = {
@@ -2716,9 +2728,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_ONLY
                         )
                     },
-                    label = { Text("Book page only") }
+                    label = "Book page only"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.bookColours ==
                         app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_AND_READER,
                     onClick = {
@@ -2726,15 +2738,15 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.prefs.BookColoursScope.BOOK_PAGE_AND_READER
                         )
                     },
-                    label = { Text("Book page + reader controls") }
+                    label = "Book page + reader controls"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.bookColours ==
                         app.xreader.data.prefs.BookColoursScope.OFF,
                     onClick = {
                         viewModel.setBookColours(app.xreader.data.prefs.BookColoursScope.OFF)
                     },
-                    label = { Text("Off") }
+                    label = "Off"
                 )
             }
             CustomiseSwitch(
@@ -2758,7 +2770,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.performanceMode ==
                         app.xreader.data.prefs.PerformanceMode.AUTOMATIC,
                     onClick = {
@@ -2766,17 +2778,17 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.prefs.PerformanceMode.AUTOMATIC
                         )
                     },
-                    label = { Text("Automatic") }
+                    label = "Automatic"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.performanceMode ==
                         app.xreader.data.prefs.PerformanceMode.SMOOTH,
                     onClick = {
                         viewModel.setPerformanceMode(app.xreader.data.prefs.PerformanceMode.SMOOTH)
                     },
-                    label = { Text("Smooth") }
+                    label = "Smooth"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = appearance.performanceMode ==
                         app.xreader.data.prefs.PerformanceMode.BEST_LOOKING,
                     onClick = {
@@ -2784,7 +2796,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.prefs.PerformanceMode.BEST_LOOKING
                         )
                     },
-                    label = { Text("Best looking") }
+                    label = "Best looking"
                 )
             }
             Text(
@@ -2829,10 +2841,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             ) {
                 for (option in app.xreader.data.extension
                     .ContentVisibility.entries) {
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = state.contentVisibility == option,
                         onClick = { viewModel.setContentVisibility(option) },
-                        label = { Text(option.label) }
+                        label = option.label
                     )
                 }
             }
@@ -2880,7 +2892,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = state.bestSourcePriority ==
                         app.xreader.data.extension.BestSourcePriority.DOWNLOADED_FIRST,
                     onClick = {
@@ -2888,9 +2900,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.extension.BestSourcePriority.DOWNLOADED_FIRST
                         )
                     },
-                    label = { Text("Already downloaded") }
+                    label = "Already downloaded"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = state.bestSourcePriority ==
                         app.xreader.data.extension.BestSourcePriority.MOST_CHAPTERS,
                     onClick = {
@@ -2898,9 +2910,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.extension.BestSourcePriority.MOST_CHAPTERS
                         )
                     },
-                    label = { Text("Most chapters") }
+                    label = "Most chapters"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = state.bestSourcePriority ==
                         app.xreader.data.extension.BestSourcePriority.NEWEST_CHAPTER,
                     onClick = {
@@ -2908,9 +2920,9 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.extension.BestSourcePriority.NEWEST_CHAPTER
                         )
                     },
-                    label = { Text("Newest chapter") }
+                    label = "Newest chapter"
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
                     selected = state.bestSourcePriority ==
                         app.xreader.data.extension.BestSourcePriority.FASTEST,
                     onClick = {
@@ -2918,7 +2930,7 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                             app.xreader.data.extension.BestSourcePriority.FASTEST
                         )
                     },
-                    label = { Text("Fastest to load") }
+                    label = "Fastest to load"
                 )
             }
             Text(
@@ -2975,10 +2987,10 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     1024 to "1 GB",
                     0 to "Off"
                 ).forEach { (capMb, label) ->
-                    FilterChip(
+                    app.xreader.ui.common.NocturneChip(
                         selected = state.downloads.autoCleanCapMb == capMb,
                         onClick = { viewModel.setAutoCleanCapMb(capMb) },
-                        label = { Text(label) }
+                        label = label
                     )
                 }
             }

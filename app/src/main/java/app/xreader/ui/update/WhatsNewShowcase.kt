@@ -59,7 +59,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,12 +89,15 @@ import kotlinx.coroutines.launch
  *    MainActivity. (The code-121 M3 reveal that stood here
  *    was removed with its design in code 124.)
  *
- * 2. [WhatsNewShowcase] — the legacy showcase for updates
- *    that carry NO new design. It wears the ACTIVE design, as
- *    before, and keeps its OWN seen-store ([ShowcasePrefs];
- *    code 125 split it off the GamePrefs store it used to
- *    share with the Me note). It is gated separately in
- *    MainActivity and never touches the reveal's record.
+ * 2. [WhatsNewShowcase] — the release showcase. It wears the
+ *    ACTIVE design, as before, and keeps its OWN seen-store
+ *    ([ShowcasePrefs]; code 125 split it off the GamePrefs
+ *    store it used to share with the Me note). Code 128: when
+ *    the reveal is still unseen, the showcase OPENS with the
+ *    design card (the reveal's first card, as itself, with
+ *    Try / Keep) and its finish settles the reveal's record
+ *    too — MainActivity owns both writes; the reveal above
+ *    remains as the fallback when this gate is closed.
  */
 
 // ── The reveal (R39) ─────────────────────────────────────────────
@@ -315,6 +322,7 @@ private fun EditorialRevealPager(
     }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun EditorialRevealFeature(
     title: String,
@@ -516,27 +524,45 @@ private fun EditorialBookDemo() {
     }
 }
 
-// ── The legacy showcase (non-design-carrying updates) ────────────
+// ── The release showcase ────────────────────────────────────────
 
 /**
- * The showcase for an update that brings NO new design: it
- * wears the ACTIVE design, as it always has. Code 125 (F4):
- * finishing or skipping records the version in the
+ * The release showcase — ONE set of cards for the update,
+ * wearing the ACTIVE design, as it always has. Code 125
+ * (F4): finishing or skipping records the version in the
  * showcase's OWN store ([ShowcasePrefs]) — never the Me
  * note's GamePrefs record any more — and Back counts as a
  * dismissal too (the BackHandler below routes it through
- * the same [onFinish]). It never reads or writes the
- * reveal's [RevealPrefs] record.
+ * the same [onFinish]).
  *
- * Code 125's cards present THIS update's fixes (History,
- * the book page, the PDF wash + scrubber, Ask AI as a
- * page), each with a REAL picture of its feature — real
- * words, real numbers, the feature's own atoms — never the
- * grey placeholder lines the code-124 cards drew.
+ * Code 128 (the v1.7.0 release set, RELEASE-DRAFT-2026-11-25):
+ * the code-125 fix cards are replaced by the release set.
+ * When [showDesignCard] is set, card 1 is the Material 3
+ * design presented AS ITSELF — composed inside
+ * [app.xreader.ui.theme.EditorialThemeRoot] with the design
+ * forced to Editorial and the mode forced to LIGHT, the
+ * reveal's own atoms — with Try / Keep on the card: Try is
+ * terminal ([onTryDesign]: MainActivity switches the design
+ * and settles BOTH seen-records), Keep advances into the
+ * feature cards, and any later finish settles both records
+ * too (MainActivity owns the records; this composable only
+ * reports the terminal actions). Existing users are never
+ * auto-switched. The standalone reveal
+ * ([WhatsNewRevealEditorial]) remains as the fallback for
+ * an install whose showcase gate is closed but whose reveal
+ * is still unseen. Cards 2+ present the release's features
+ * — TXT books, the opening, Ask AI's page, the book page,
+ * the PDF fixes, History — each with its own small
+ * animation or live demo of real atoms, never a placeholder.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun WhatsNewShowcase(onFinish: () -> Unit) {
+fun WhatsNewShowcase(
+    designState: DesignState,
+    showDesignCard: Boolean,
+    onTryDesign: () -> Unit,
+    onFinish: () -> Unit
+) {
     // Code 125 (F4): Back dismisses the showcase AND writes
     // the seen record through onFinish. Before this, Back
     // left the showcase (the app exited) without any write,
@@ -558,61 +584,98 @@ fun WhatsNewShowcase(onFinish: () -> Unit) {
             dismissOnClickOutside = false
         )
     ) {
-        WhatsNewShowcasePager(onFinish = onFinish)
+        WhatsNewShowcasePager(
+            designState = designState,
+            showDesignCard = showDesignCard,
+            onTryDesign = onTryDesign,
+            onFinish = onFinish
+        )
     }
 }
 
 @Composable
-private fun WhatsNewShowcasePager(onFinish: () -> Unit) {
+private fun WhatsNewShowcasePager(
+    designState: DesignState,
+    showDesignCard: Boolean,
+    onTryDesign: () -> Unit,
+    onFinish: () -> Unit
+) {
     // Code 127 (audit G1): the Nocturne chrome — glass
     // feature cards and the kit's pills — under Nocturne;
     // the Material 3 face keeps its Card + Button form.
+    // Code 128: the release set (draft order: TXT, the
+    // opening, Ask AI, the book page, PDF, History). When
+    // the design card leads, it is composed inside
+    // EditorialThemeRoot as itself (below); the feature
+    // cards wear the active face as before.
     val nocturne = !app.xreader.ui.theme.isEditorialDesign()
     val features = remember {
         listOf(
             ShowcaseFeature(
-                title = "Highlights you can read through",
-                body = "A PDF highlight is a see-through wash " +
-                    "now — the words stay readable through " +
-                    "the colour, never covered by a solid " +
-                    "block, at any zoom.",
-                demo = ShowcaseDemo.PDF_WASH
+                title = "TXT books, fully read",
+                body = "Plain-text books open as real books " +
+                    "now: chapters are detected for you, " +
+                    "encodings like GBK, Big5 and Russian are " +
+                    "read correctly — with an encoding door on " +
+                    "the book page — and chapters can be " +
+                    "re-detected any time.",
+                demo = ShowcaseDemo.TXT
             ),
             ShowcaseFeature(
-                title = "Every page in the scrubber",
-                body = "The filmstrip shows the real page on " +
-                    "every thumbnail now, even on stretches " +
-                    "you haven't read yet — not a dark card " +
-                    "with a number.",
-                demo = ShowcaseDemo.FILMSTRIP
+                title = "A proper opening",
+                body = "Xreader opens with its mark now: the " +
+                    "logo animates in, in your design's " +
+                    "colours, and hands over to your Library " +
+                    "the moment it is ready.",
+                demo = ShowcaseDemo.SPLASH
             ),
             ShowcaseFeature(
-                title = "Ask AI is a page now",
-                body = "Ask AI opens as its own full page, " +
-                    "with Back taking you exactly where you " +
-                    "were — from the reader and from the " +
-                    "book page.",
+                title = "Ask AI has its own page",
+                body = "Ask AI opens as its own full page — " +
+                    "Summarize, Catch me up, Translate, " +
+                    "Illustrate and Lore chat — with Back " +
+                    "taking you exactly where you were.",
                 demo = ShowcaseDemo.AI_PAGE
-            ),
-            ShowcaseFeature(
-                title = "History, fixed",
-                body = "No more red behind the cards, the " +
-                    "reading pulse shows its numbers again, " +
-                    "and every card carries its progress bar " +
-                    "and its actions whole.",
-                demo = ShowcaseDemo.HISTORY
             ),
             ShowcaseFeature(
                 title = "The book page, tidied",
                 body = "Chapters show their release dates, a " +
                     "pull down from the top refreshes the " +
-                    "list, and Refresh, Download all and " +
-                    "Save as EPUB all fit on one row.",
+                    "list, and Download all sits beside " +
+                    "per-chapter downloads.",
                 demo = ShowcaseDemo.BOOK_PAGE
+            ),
+            ShowcaseFeature(
+                title = "PDF, fixed",
+                body = "A highlight is a see-through wash " +
+                    "now — the words stay readable through " +
+                    "the colour — and the page strip shows " +
+                    "the real page on every thumbnail, not a " +
+                    "dark card with a number.",
+                demo = ShowcaseDemo.PDF_FIXES
+            ),
+            ShowcaseFeature(
+                title = "History, fixed",
+                body = "No more red behind the cards, the " +
+                    "reading pulse shows its numbers again, " +
+                    "every card carries its progress and its " +
+                    "actions whole, and Clear history sits in " +
+                    "the open.",
+                demo = ShowcaseDemo.HISTORY
             )
         )
     }
-    val pagerState = rememberPagerState(pageCount = { features.size })
+    val pageCount = features.size + if (showDesignCard) 1 else 0
+    val pagerState = rememberPagerState(pageCount = { pageCount })
+    // The design card's preview state: the design forced to
+    // Editorial, the mode forced to LIGHT for that subtree
+    // only — the reveal's own construction.
+    val designPreview = remember(designState) {
+        designState.copy(
+            design = app.xreader.data.prefs.AppDesign.EDITORIAL,
+            themeMode = app.xreader.data.prefs.M3ThemeMode.LIGHT
+        )
+    }
     val scope = rememberCoroutineScope()
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -639,24 +702,46 @@ private fun WhatsNewShowcasePager(onFinish: () -> Unit) {
                     .PaddingValues(vertical = 16.dp),
                 pageSpacing = 16.dp
             ) { page ->
-                val feature = features[page]
-                if (nocturne) {
-                    app.xreader.ui.common.GlassCard(
-                        modifier = Modifier.fillMaxSize()
+                if (showDesignCard && page == 0) {
+                    // Card 1: the design AS ITSELF — the whole
+                    // card composed inside the Editorial theme
+                    // root (forced LIGHT preview), exactly as
+                    // the reveal presents it.
+                    app.xreader.ui.theme.EditorialThemeRoot(
+                        design = designPreview,
+                        reduceMotion = false
                     ) {
-                        ShowcaseFeatureContent(feature)
+                        ShowcaseDesignCard(
+                            onTryDesign = onTryDesign,
+                            onKeep = {
+                                scope.launch {
+                                    pagerState.animateScrollToPage(1)
+                                }
+                            }
+                        )
                     }
                 } else {
-                    Card(
-                        shape = MaterialTheme.shapes.extraLarge,
-                        colors = CardDefaults.cardColors(
-                            containerColor =
-                                MaterialTheme.colorScheme
-                                    .surfaceContainer
-                        ),
-                        modifier = Modifier.fillMaxSize()
-                    ) {
-                        ShowcaseFeatureContent(feature)
+                    val feature = features[
+                        page - if (showDesignCard) 1 else 0
+                    ]
+                    if (nocturne) {
+                        app.xreader.ui.common.GlassCard(
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            ShowcaseFeatureContent(feature)
+                        }
+                    } else {
+                        Card(
+                            shape = MaterialTheme.shapes.extraLarge,
+                            colors = CardDefaults.cardColors(
+                                containerColor =
+                                    MaterialTheme.colorScheme
+                                        .surfaceContainer
+                            ),
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            ShowcaseFeatureContent(feature)
+                        }
                     }
                 }
             }
@@ -675,7 +760,7 @@ private fun WhatsNewShowcasePager(onFinish: () -> Unit) {
                     TextButton(onClick = onFinish) { Text("Skip") }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    features.indices.forEach { index ->
+                    (0 until pageCount).forEach { index ->
                         Box(
                             Modifier
                                 .size(8.dp)
@@ -695,7 +780,7 @@ private fun WhatsNewShowcasePager(onFinish: () -> Unit) {
                     }
                 }
                 val nextLabel = if (pagerState.currentPage <
-                    features.lastIndex
+                    pageCount - 1
                 ) {
                     "Next"
                 } else {
@@ -703,7 +788,7 @@ private fun WhatsNewShowcasePager(onFinish: () -> Unit) {
                 }
                 val onNext: () -> Unit = {
                     if (pagerState.currentPage <
-                        features.lastIndex
+                        pageCount - 1
                     ) {
                         scope.launch {
                             pagerState.animateScrollToPage(
@@ -721,6 +806,87 @@ private fun WhatsNewShowcasePager(onFinish: () -> Unit) {
                     )
                 } else {
                     Button(onClick = onNext) { Text(nextLabel) }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Card 1 of the release showcase (code 128): the Material 3
+ * design presented AS ITSELF. Composed by the pager inside
+ * [app.xreader.ui.theme.EditorialThemeRoot] with the LIGHT
+ * preview state, so every colour and shape here is the
+ * design's own. The stage carries the reveal's two demo
+ * atoms (the Library miniature and the book-page miniature);
+ * Try is terminal (MainActivity switches the design and
+ * settles both records), Keep advances to the feature
+ * cards. Nobody is switched without tapping Try.
+ */
+@Composable
+private fun ShowcaseDesignCard(
+    onTryDesign: () -> Unit,
+    onKeep: () -> Unit
+) {
+    Card(
+        shape = MaterialTheme.shapes.extraLarge,
+        colors = CardDefaults.cardColors(
+            containerColor =
+                MaterialTheme.colorScheme.surfaceContainerLow
+        ),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        Column(Modifier.fillMaxSize()) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .background(
+                        MaterialTheme.colorScheme
+                            .secondaryContainer
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    verticalArrangement =
+                        Arrangement.spacedBy(18.dp),
+                    horizontalAlignment =
+                        Alignment.CenterHorizontally
+                ) {
+                    EditorialLibraryDemo()
+                    EditorialBookDemo()
+                }
+            }
+            Column(
+                Modifier.padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "A whole new design — Material 3",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    "A new design for Xreader — warm paper, a " +
+                        "sage accent and a serif voice, drawn " +
+                        "around your books. You are looking at " +
+                        "it now. Try it, or keep the design you " +
+                        "have — you can switch any time in " +
+                        "Customise → Design.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme
+                        .onSurfaceVariant
+                )
+                Button(
+                    onClick = onTryDesign,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Try Material 3")
+                }
+                FilledTonalButton(
+                    onClick = onKeep,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Keep mine")
                 }
             }
         }
@@ -745,16 +911,18 @@ private fun ShowcaseFeatureContent(feature: ShowcaseFeature) {
             contentAlignment = Alignment.Center
         ) {
             when (feature.demo) {
-                ShowcaseDemo.PDF_WASH ->
-                    PdfHighlightWashDemo()
-                ShowcaseDemo.FILMSTRIP ->
-                    FilmstripDemo()
+                ShowcaseDemo.TXT ->
+                    TxtBooksDemo()
+                ShowcaseDemo.SPLASH ->
+                    SplashDemo()
                 ShowcaseDemo.AI_PAGE ->
                     AskAiPageDemo()
-                ShowcaseDemo.HISTORY ->
-                    HistoryFixedDemo()
                 ShowcaseDemo.BOOK_PAGE ->
                     BookPageDemo()
+                ShowcaseDemo.PDF_FIXES ->
+                    PdfFixesDemo()
+                ShowcaseDemo.HISTORY ->
+                    HistoryFixedDemo()
             }
         }
         Column(
@@ -785,18 +953,202 @@ private data class ShowcaseFeature(
 )
 
 private enum class ShowcaseDemo {
-    PDF_WASH, FILMSTRIP, AI_PAGE, HISTORY, BOOK_PAGE
+    TXT, SPLASH, AI_PAGE, BOOK_PAGE, PDF_FIXES, HISTORY
 }
 
 /**
- * Demo: a PDF highlight as a wash — a real page of real
- * words, with the translucent wash growing across one
- * phrase and a handle at each end, on a loop. The wash is
- * the scheme's primary at the highlight alpha (40%): the
- * words read straight through it.
+ * Demo: a TXT book read as a book (code 128) — the file's
+ * name with its detected encoding, the detected chapter
+ * list with a scan highlight travelling down it (the
+ * detection pass, in miniature), and the re-detect and
+ * encoding doors. All geometry is fixed: three 36dp rows
+ * in a 108dp stage, the highlight a 36dp band whose offset
+ * is the phase times the fixed travel — nothing sizes
+ * itself from a wrap-content parent.
  */
 @Composable
-private fun PdfHighlightWashDemo() {
+private fun TxtBooksDemo() {
+    val scheme = MaterialTheme.colorScheme
+    val transition = rememberInfiniteTransition(label = "txtDemo")
+    val scan by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2100),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "txtDemoScan"
+    )
+    Column(
+        Modifier
+            .width(280.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(scheme.surface)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "sword-chronicle.txt",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f),
+                maxLines = 1
+            )
+            Surface(
+                color = scheme.secondaryContainer,
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text(
+                    "Encoding · GBK",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = scheme.onSecondaryContainer,
+                    modifier = Modifier.padding(
+                        horizontal = 10.dp, vertical = 6.dp
+                    )
+                )
+            }
+        }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(108.dp)
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .offset(y = (scan * 72).dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(scheme.primaryContainer)
+            )
+            Column {
+                listOf(
+                    "Chapter 1 — The Rain Sword",
+                    "Chapter 2 — A Name Spoken",
+                    "Chapter 3 — The Road North"
+                ).forEach { title ->
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(36.dp)
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Text(
+                            title,
+                            style = MaterialTheme.typography
+                                .bodyMedium,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Surface(
+                color = scheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text(
+                    "Re-detect chapters",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(
+                        horizontal = 10.dp, vertical = 6.dp
+                    )
+                )
+            }
+            Surface(
+                color = scheme.surfaceContainerHigh,
+                shape = RoundedCornerShape(16.dp)
+            ) {
+                Text(
+                    "Encoding…",
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(
+                        horizontal = 10.dp, vertical = 6.dp
+                    )
+                )
+            }
+        }
+    }
+}
+
+/**
+ * Demo: the opening (code 128) — the branded intro in
+ * miniature: the mark and the wordmark fade and settle in
+ * on a loop, on the intro's own dark ground. Fixed sizes,
+ * centred; nothing is measured from anything else.
+ */
+@Composable
+private fun SplashDemo() {
+    val scheme = MaterialTheme.colorScheme
+    val transition = rememberInfiniteTransition(label = "splashDemo")
+    val appear by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1400),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "splashDemoAppear"
+    )
+    Box(
+        Modifier
+            .width(280.dp)
+            .height(190.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color(0xFF0B0B0F)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier
+                .alpha(0.25f + 0.75f * appear)
+                .scale(0.94f + 0.06f * appear)
+        ) {
+            Box(
+                Modifier
+                    .size(52.dp)
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(scheme.primary),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "X",
+                    style = MaterialTheme.typography.headlineMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = scheme.onPrimary
+                )
+            }
+            Text(
+                "Xreader",
+                style = MaterialTheme.typography.titleLarge,
+                color = Color.White
+            )
+        }
+    }
+}
+
+/**
+ * Demo: the PDF fixes (code 128) — the read-through wash
+ * over a real phrase, with the filmstrip of real pages
+ * beneath it. The wash is drawn BEHIND the phrase's own
+ * text with drawBehind, sized from the text's own draw
+ * size. Code 127's demo sized the wash with
+ * fillMaxWidth/fillMaxHeight inside a wrap-content parent,
+ * so it inflated to the whole stage and crushed the words
+ * beside it into one-letter-per-line wrapping (the owner's
+ * F-A circle). A wash measured from the words themselves
+ * cannot do that; the handles ride the wash's own ends.
+ */
+@Composable
+private fun PdfFixesDemo() {
+    val scheme = MaterialTheme.colorScheme
     val transition = rememberInfiniteTransition(label = "pdfDemo")
     val grow by transition.animateFloat(
         initialValue = 0f,
@@ -807,71 +1159,88 @@ private fun PdfHighlightWashDemo() {
         ),
         label = "pdfDemoGrow"
     )
-    val wash = MaterialTheme.colorScheme.primary.copy(alpha = 0.40f)
+    val wash = scheme.primary.copy(alpha = 0.40f)
     Column(
-        Modifier
-            .width(260.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        Text(
-            "The sword master stepped into the rain and did not look back.",
-            style = MaterialTheme.typography.bodyMedium
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(
+            Modifier
+                .width(260.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(scheme.surface)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Text(
-                "He carried ",
+                "The sword master stepped into the rain and " +
+                    "did not look back.",
                 style = MaterialTheme.typography.bodyMedium
             )
-            // The highlighted phrase: real words, the wash
-            // over them, handles at the wash's ends. The
-            // wash is drawn over the words at 40% — they
-            // read through it, which is the whole point.
-            Box {
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    "the rain",
+                    "He carried ",
                     style = MaterialTheme.typography.bodyMedium
                 )
-                Box(
-                    Modifier
-                        .fillMaxWidth(grow.coerceAtLeast(0.02f))
-                        .fillMaxHeight()
-                        .background(wash, RoundedCornerShape(3.dp))
-                ) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomEnd)
-                            .offset(x = 3.dp, y = 7.dp)
-                            .size(7.dp)
-                            .clip(CircleShape)
-                            .background(
-                                MaterialTheme.colorScheme.primary
-                            )
-                    )
-                }
-                Box(
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .offset(x = (-4).dp, y = 7.dp)
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(
-                            MaterialTheme.colorScheme.primary
+                Text(
+                    "the rain",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.drawBehind {
+                        val reach = grow.coerceAtLeast(0.06f)
+                        val washWidth = size.width * reach
+                        drawRoundRect(
+                            color = wash,
+                            topLeft =
+                                androidx.compose.ui.geometry.Offset(
+                                    -3.dp.toPx(),
+                                    size.height * 0.10f
+                                ),
+                            size =
+                                androidx.compose.ui.geometry.Size(
+                                    washWidth + 6.dp.toPx(),
+                                    size.height * 0.80f
+                                ),
+                            cornerRadius =
+                                androidx.compose.ui.geometry
+                                    .CornerRadius(
+                                        3.dp.toPx(), 3.dp.toPx()
+                                    )
                         )
+                        drawCircle(
+                            color = scheme.primary,
+                            radius = 3.5.dp.toPx(),
+                            center =
+                                androidx.compose.ui.geometry.Offset(
+                                    -3.dp.toPx(),
+                                    size.height + 2.dp.toPx()
+                                )
+                        )
+                        drawCircle(
+                            color = scheme.primary,
+                            radius = 3.5.dp.toPx(),
+                            center =
+                                androidx.compose.ui.geometry.Offset(
+                                    -3.dp.toPx() + washWidth +
+                                        6.dp.toPx(),
+                                    size.height + 2.dp.toPx()
+                                )
+                        )
+                    }
+                )
+                Text(
+                    " on his shoulders.",
+                    style = MaterialTheme.typography.bodyMedium
                 )
             }
             Text(
-                " on his shoulders.",
-                style = MaterialTheme.typography.bodyMedium
+                "Behind him the town kept its lights on, " +
+                    "waiting for a name it would never hear " +
+                    "again.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant
             )
         }
-        Text(
-            "Behind him the town kept its lights on, waiting for a name it would never hear again.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        FilmstripDemo()
     }
 }
 
@@ -1133,8 +1502,8 @@ private fun HistoryFixedDemo() {
 
 /**
  * Demo: the book page tidied — Contents rows with their
- * real release dates under the titles, and the three
- * actions whole on one row.
+ * real release dates under the titles, and the actions
+ * whole (code 128: in a wrapping flow — see below).
  */
 @Composable
 private fun BookPageDemo() {
@@ -1184,7 +1553,16 @@ private fun BookPageDemo() {
                 }
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        // Code 128 (audit X3): the three action chips ride a
+        // FlowRow, not a fixed Row — as a Row their combined
+        // non-shrinking widths (~267dp) overran this demo's
+        // 252dp content box and the last chip ran past the
+        // card's rounded clip. In the flow each chip stays
+        // whole; the third wraps to its own line.
+        androidx.compose.foundation.layout.FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
             listOf("Refresh", "Download all", "Save as EPUB")
                 .forEach { label ->
                     Surface(

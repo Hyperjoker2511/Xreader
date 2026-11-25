@@ -554,7 +554,22 @@ fun ProfileScreen(
                             viewModel.setDailyGoal(goalDraft.toInt())
                         },
                         valueRange = 5f..180f,
-                        steps = 34
+                        steps = 34,
+                        // Code 128 (audit Y7): the kit's
+                        // slider colours — the CustomiseSlider
+                        // treatment (accent thumb/track) —
+                        // not the bare stock slider colours
+                        // inside the Nocturne glass card.
+                        colors = androidx.compose.material3
+                            .SliderDefaults.colors(
+                                thumbColor = MaterialTheme
+                                    .colorScheme.primary,
+                                activeTrackColor = MaterialTheme
+                                    .colorScheme.primary,
+                                inactiveTrackColor = MaterialTheme
+                                    .colorScheme
+                                    .surfaceContainerHighest
+                            )
                     )
                     // v1.2.0 (WS4 declutter): the "Daily goal: N
                     // minutes" caption under the slider is gone —

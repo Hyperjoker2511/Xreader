@@ -338,18 +338,32 @@ fun GlassSheetActionRow(
 @Composable
 fun DialogDangerOption(label: String, onClick: () -> Unit) {
     // Code 127 (audit B1/A2): the danger row wears the active
-    // face. Editorial keeps the stock M3 text row (its dialog
-    // dress, cf. the Editorial book page's dialogs); Nocturne
-    // takes a glass row — the GlassSheetActionRow language
-    // without the icon slot — instead of a bare M3 TextButton
-    // floating in the dialog body.
+    // face. Nocturne takes a glass row — the GlassSheetActionRow
+    // language without the icon slot — instead of a bare M3
+    // TextButton floating in the dialog body.
+    // Code 128 (audit B1/A2 re-judged under "all new design,
+    // nothing old"): the Editorial branch's bare full-width
+    // TextButton row was the old dialog anatomy with an M3
+    // control pasted in — the owner's circle on the bulk
+    // Remove dialog named exactly it. The Editorial row is
+    // now a designed M3 list row: a tonal error surface in
+    // the theme's medium shape carrying the choice in
+    // bodyLarge, the simple-dialog list anatomy. Every
+    // Editorial delete/remove dialog inherits it.
     if (app.xreader.ui.theme.isEditorialDesign()) {
-        TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        androidx.compose.material3.Surface(
+            onClick = onClick,
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.fillMaxWidth()
+        ) {
             Text(
                 label,
-                color = errorTextColor(),
-                modifier = Modifier.weight(1f),
-                textAlign = TextAlign.Start
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.padding(
+                    horizontal = 16.dp, vertical = 12.dp
+                )
             )
         }
     } else {
@@ -375,21 +389,27 @@ fun DialogDangerOption(label: String, onClick: () -> Unit) {
  * dialog's body — the shelf picker's rows and their kin. The
  * face-aware sibling of [DialogDangerOption]: Editorial wears
  * an M3 list row; Nocturne wears a glass row.
+ * Code 128 (audit C2 re-judged): the Editorial "row" was a
+ * bare clickable Row with text — no row anatomy at all. It is
+ * now the same designed list row as its danger sibling: a
+ * tonal surface in the theme's medium shape, bodyLarge label.
  */
 @Composable
 fun DialogOptionRow(label: String, onClick: () -> Unit) {
     if (app.xreader.ui.theme.isEditorialDesign()) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onClick)
-                .padding(horizontal = 4.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
+        androidx.compose.material3.Surface(
+            onClick = onClick,
+            shape = MaterialTheme.shapes.medium,
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth()
         ) {
             Text(
                 label,
                 style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
+                modifier = Modifier.padding(
+                    horizontal = 16.dp, vertical = 12.dp
+                )
             )
         }
     } else {

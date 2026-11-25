@@ -568,6 +568,10 @@ fun DictionaryResultDialog(
 /** The selection Translate result: a spinner while the
  * translation runs, then the translated text (or the plain
  * verdict/error line the helper returned). */
+@OptIn(
+    androidx.compose.material3
+        .ExperimentalMaterial3ExpressiveApi::class
+)
 @Composable
 fun SelectionTranslateDialog(
     original: String,
@@ -597,9 +601,18 @@ fun SelectionTranslateDialog(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically
                     ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.padding(2.dp)
-                        )
+                        // Code 128 (audit C10): the loading
+                        // state wears the face — the M3
+                        // LoadingIndicator in the Material 3
+                        // face (its loading language, StateKit),
+                        // the plain spinner in Nocturne.
+                        if (app.xreader.ui.theme.isEditorialDesign()) {
+                            androidx.compose.material3.LoadingIndicator()
+                        } else {
+                            CircularProgressIndicator(
+                                modifier = Modifier.padding(2.dp)
+                            )
+                        }
                         Text("Translating…")
                     }
                 } else {

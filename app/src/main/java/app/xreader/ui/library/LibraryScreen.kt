@@ -658,56 +658,85 @@ fun LibraryScreen(
         // same crush family as D2/D25); the count keeps its place
         // at the start of the first row instead of a weight, which
         // a scrolling row can't honour.
+        // Code 128 (F-C): the scrolling rows are REVERSED — on the
+        // owner's 127 proof the count clipped at the scroll's edge
+        // and actions ran off-screen (the Editorial twin's
+        // conviction). The layout below fits whole instead:
+        // header count + two-per-row weighted actions.
         selection?.let { picked ->
             // Nocturne §5.1: the batch actions ride in ONE frosted
             // capsule bar (24dp corners, Q12) instead of two bare
             // text rows.
-            androidx.compose.material3.Surface(
-                shape = RoundedCornerShape(24.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shadowElevation = 6.dp
+            // Code 128 (F-C fit, the Editorial bar's conviction
+            // applied to its twin): the rows no longer scroll
+            // sideways — the count was inside the first scrolling
+            // row and clipped at its edge, and actions ran off
+            // the right. The count now sits fixed in a header row
+            // beside Done, and the actions ride two-per-row at
+            // equal weights, every label whole at 411dp.
+            // Code 128 (audit B*): the capsule's construction is
+            // the face's glass now — a GlassCard (the user's
+            // glass style and card radius), not a plain
+            // surfaceContainerHigh slab. Its text buttons are
+            // unchanged dress.
+            GlassCard(
+                contentPadding =
+                    androidx.compose.foundation.layout
+                        .PaddingValues(0.dp)
             ) {
             Column(
-                Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(2.dp)
+                Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
                         "${picked.size} selected",
                         style = MaterialTheme.typography.titleSmall,
-                        modifier = Modifier.padding(end = 8.dp)
+                        modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = { shelfPickerFor = picked }) {
-                        Text("Add to shelf")
-                    }
-                    TextButton(onClick = {
-                        viewModel.bulkSetFavourite(picked, true)
-                    }) { Text("Favourite") }
                     TextButton(onClick = { selection = null }) { Text("Done") }
                 }
-                Row(
-                    Modifier.horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    TextButton(onClick = { viewModel.bulkDownload(picked) }) {
-                        Text("Download")
-                    }
-                    TextButton(onClick = { viewModel.bulkDeleteDownloads(picked) }) {
-                        Text("Delete downloads")
-                    }
-                    TextButton(onClick = {
-                        viewModel.bulkSetStatus(
-                            picked, app.xreader.data.library.ReadingStatus.COMPLETED
-                        )
-                    }) { Text("Mark read") }
-                    TextButton(onClick = {
-                        bulkRemoveSize = null
-                        bulkRemoveOpen = true
-                    }) { Text("Remove…") }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = { shelfPickerFor = picked },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Add to shelf", maxLines = 1) }
+                    TextButton(
+                        onClick = {
+                            viewModel.bulkSetFavourite(picked, true)
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Favourite", maxLines = 1) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = { viewModel.bulkDownload(picked) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Download", maxLines = 1) }
+                    TextButton(
+                        onClick = { viewModel.bulkDeleteDownloads(picked) },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Delete downloads", maxLines = 1) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(
+                        onClick = {
+                            viewModel.bulkSetStatus(
+                                picked, app.xreader.data.library.ReadingStatus.COMPLETED
+                            )
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Mark read", maxLines = 1) }
+                    TextButton(
+                        onClick = {
+                            bulkRemoveSize = null
+                            bulkRemoveOpen = true
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("Remove…", maxLines = 1) }
                 }
             }
             }
@@ -2401,19 +2430,107 @@ private fun ManageShelvesDialog(
                     Text("Your shelves", style = MaterialTheme.typography.titleSmall)
                     state.userShelves.forEach { shelf ->
                         Column {
+                            val shelfLabel = shelf.name +
+                                if (shelf.kind ==
+                                    app.xreader.data.db.ShelfKind.SMART
+                                ) {
+                                    " (smart)"
+                                } else {
+                                    ""
+                                }
+                            if (app.xreader.ui.theme.isEditorialDesign()) {
+                                // Code 128 (audit C1 re-judged
+                                // under "all new design, nothing
+                                // old"): the shelf rows were bare
+                                // text actions ("↑" "↓" "Rename"
+                                // "Delete" TextButtons) in the
+                                // dialog body. The Editorial form
+                                // is a designed list row now — a
+                                // tonal surface in the theme's
+                                // medium shape carrying icon-button
+                                // actions, Delete error-tinted.
+                                // Nocturne keeps its text row.
+                                androidx.compose.material3.Surface(
+                                    shape = MaterialTheme.shapes.medium,
+                                    color = MaterialTheme.colorScheme
+                                        .surfaceContainerLow,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Row(
+                                        Modifier.padding(
+                                            start = 16.dp, end = 4.dp
+                                        ),
+                                        verticalAlignment =
+                                            Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            shelfLabel,
+                                            style = MaterialTheme
+                                                .typography.bodyLarge,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        androidx.compose.material3.IconButton(
+                                            onClick = {
+                                                onMove(shelf.id, true)
+                                            }
+                                        ) {
+                                            androidx.compose.material3.Icon(
+                                                androidx.compose.material
+                                                    .icons.Icons.Default
+                                                    .KeyboardArrowUp,
+                                                contentDescription =
+                                                    "Move up"
+                                            )
+                                        }
+                                        androidx.compose.material3.IconButton(
+                                            onClick = {
+                                                onMove(shelf.id, false)
+                                            }
+                                        ) {
+                                            androidx.compose.material3.Icon(
+                                                androidx.compose.material
+                                                    .icons.Icons.Default
+                                                    .KeyboardArrowDown,
+                                                contentDescription =
+                                                    "Move down"
+                                            )
+                                        }
+                                        androidx.compose.material3.IconButton(
+                                            onClick = {
+                                                renamingId = shelf.id
+                                                renameText = shelf.name
+                                            }
+                                        ) {
+                                            androidx.compose.material3.Icon(
+                                                androidx.compose.material
+                                                    .icons.Icons.Default.Edit,
+                                                contentDescription =
+                                                    "Rename shelf"
+                                            )
+                                        }
+                                        androidx.compose.material3.IconButton(
+                                            onClick = {
+                                                deleteTarget = shelf
+                                            }
+                                        ) {
+                                            androidx.compose.material3.Icon(
+                                                androidx.compose.material
+                                                    .icons.Icons.Default.Delete,
+                                                contentDescription =
+                                                    "Delete shelf",
+                                                tint = MaterialTheme
+                                                    .colorScheme.error
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
                             Row(
                                 Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    shelf.name +
-                                        if (shelf.kind ==
-                                            app.xreader.data.db.ShelfKind.SMART
-                                        ) {
-                                            " (smart)"
-                                        } else {
-                                            ""
-                                        },
+                                    shelfLabel,
                                     Modifier.weight(1f)
                                 )
                                 TextButton(onClick = { onMove(shelf.id, true) }) {
@@ -2429,6 +2546,7 @@ private fun ManageShelvesDialog(
                                 TextButton(onClick = { deleteTarget = shelf }) {
                                     Text("Delete")
                                 }
+                            }
                             }
                             if (renamingId == shelf.id) {
                                 Row(
@@ -2829,7 +2947,8 @@ private fun editorialTabKey(
 
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3Api::class,
-    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
 )
 @Composable
 private fun EditorialLibraryContent(
@@ -3529,18 +3648,27 @@ private fun EditorialLibraryContent(
             }
         }
         // Code 124 (D3): the multi-select bar — the same
-        // bulk actions the Nocturne Library offers, in this
-        // face's capsule language.
-        // Code 127 (audit A1): the actions now wear the
-        // face's button treatment — filled tonal buttons in
-        // the capsule, Remove error-toned — not bare
-        // TextButtons on a slab (the owner's "Not material
-        // 3" circle on this bar).
+        // bulk actions the Nocturne Library offers.
+        // Code 127 (audit A1) put the face's buttons inside
+        // the old bar; the owner's verdict on that proof was
+        // "You just added material 3 on the old design."
+        // Code 128 (F-C): the bar itself is designed in the
+        // face now — the FloatingToolbar container language
+        // (surfaceContainerHigh, the theme's extraLarge
+        // shape, a 1dp outlineVariant border: the reader
+        // selection bar's container, SelectionBar.kt), the
+        // count fixed in a header row beside Done where it
+        // can never be clipped, and the actions as tonal
+        // buttons in a wrapping flow — every button whole
+        // at 411dp, no sideways scrolling anywhere.
         selection?.let { picked ->
             Surface(
-                shape = RoundedCornerShape(24.dp),
+                shape = MaterialTheme.shapes.extraLarge,
                 color = scheme.surfaceContainerHigh,
                 shadowElevation = 6.dp,
+                border = androidx.compose.foundation.BorderStroke(
+                    1.dp, scheme.outlineVariant
+                ),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .padding(
@@ -3550,43 +3678,52 @@ private fun EditorialLibraryContent(
                     .fillMaxWidth()
             ) {
                 Column(
-                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                    Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
                             "${picked.size} selected",
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(end = 2.dp)
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f)
                         )
+                        TextButton(onClick = { selection = null }) {
+                            Text("Done")
+                        }
+                    }
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val barButtonPadding =
+                            androidx.compose.foundation.layout
+                                .PaddingValues(
+                                    horizontal = 12.dp,
+                                    vertical = 8.dp
+                                )
                         androidx.compose.material3.FilledTonalButton(
-                            onClick = { shelfPickerFor = picked }
-                        ) { Text("Add to shelf") }
+                            onClick = { shelfPickerFor = picked },
+                            contentPadding = barButtonPadding
+                        ) { Text("Add to shelf", maxLines = 1) }
                         androidx.compose.material3.FilledTonalButton(
                             onClick = {
                                 viewModel.bulkSetFavourite(picked, true)
-                            }
-                        ) { Text("Favourite") }
-                        androidx.compose.material3.FilledTonalButton(
-                            onClick = { selection = null }
-                        ) { Text("Done") }
-                    }
-                    Row(
-                        Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
+                            },
+                            contentPadding = barButtonPadding
+                        ) { Text("Favourite", maxLines = 1) }
                         androidx.compose.material3.FilledTonalButton(
                             onClick = {
                                 viewModel.bulkDownload(picked)
-                            }
-                        ) { Text("Download") }
+                            },
+                            contentPadding = barButtonPadding
+                        ) { Text("Download", maxLines = 1) }
                         androidx.compose.material3.FilledTonalButton(
-                            onClick = { bulkStatusOpen = true }
-                        ) { Text("Set status…") }
+                            onClick = { bulkStatusOpen = true },
+                            contentPadding = barButtonPadding
+                        ) { Text("Set status…", maxLines = 1) }
                         androidx.compose.material3.FilledTonalButton(
                             onClick = {
                                 viewModel.bulkSetStatus(
@@ -3594,8 +3731,9 @@ private fun EditorialLibraryContent(
                                     app.xreader.data.library.ReadingStatus.COMPLETED
                                 )
                                 selection = null
-                            }
-                        ) { Text("Mark read") }
+                            },
+                            contentPadding = barButtonPadding
+                        ) { Text("Mark read", maxLines = 1) }
                         androidx.compose.material3.FilledTonalButton(
                             onClick = {
                                 bulkRemoveSize = null
@@ -3604,8 +3742,9 @@ private fun EditorialLibraryContent(
                             colors = androidx.compose.material3
                                 .ButtonDefaults.filledTonalButtonColors(
                                     contentColor = scheme.error
-                                )
-                        ) { Text("Remove…") }
+                                ),
+                            contentPadding = barButtonPadding
+                        ) { Text("Remove…", maxLines = 1) }
                     }
                 }
             }

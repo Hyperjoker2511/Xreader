@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.compose.setContent
 import androidx.fragment.app.FragmentActivity
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -431,89 +432,172 @@ class MainActivity : FragmentActivity() {
                             onLibraryReady = { libraryReady = true }
                         )
                         // v1.2.0 (WS6): the animated launch intro
-                        // — a pure overlay ABOVE the shell. It is
-                        // composed as a sibling, never instead of
-                        // or before the shell, so first content is
-                        // never gated on it; it dismisses on the
-                        // Library-ready signal above (held until
+                        // — an overlay ABOVE the shell, dismissing
+                        // on the Library-ready signal (held until
                         // its enter animation completes — code
-                        // 127) and is hard-capped at 1,000 ms by
-                        // its controller.
-                        if (designState.design !=
-                            app.xreader.data.prefs.AppDesign.NOCTURNE
-                        ) {
-                            // Code 120 (S2): in the Material 3
-                            // design the launch intro is the plain
-                            // spec surface — wordmark on the scheme
-                            // surface, dismissed by an effect fade
-                            // when Library is ready. The spring
-                            // intro is Nocturne's and stays
-                            // Nocturne's. The intro's own Show/Skip
-                            // knob (§2.11 Advanced) gates both.
-                            // Code 123 (S2 extension): Editorial
-                            // takes the same plain surface — under
-                            // its theme that IS the extension's
-                            // form: paper ground, serif wordmark.
-                            app.xreader.ui.start.M3LaunchIntro(
-                                libraryReady = libraryReady,
-                                animationsEnabled = motionEnabled &&
-                                    launchMotionTier !=
-                                        SpringMotionEngine.MotionTier.Minimal &&
-                                    designState.launchIntro
-                            )
-                        } else {
-                            LaunchIntro(
-                                libraryReady = libraryReady,
-                                animationsEnabled = motionEnabled &&
-                                    launchMotionTier !=
-                                        SpringMotionEngine.MotionTier.Minimal &&
-                                    designState.launchIntro
+                        // 127) and hard-capped by its controller.
+                        //
+                        // Code 128 (F-B — the splash-order
+                        // conviction): the intro now GATES the
+                        // app. The owner's code-127 proof video
+                        // showed the Library and its "Loading
+                        // your library" state painting BEFORE
+                        // the branded moment, which arrived late
+                        // over them. Two mechanisms caused it:
+                        // the M3 intro started invisible and
+                        // faded its whole surface in (the shell
+                        // showed through its arrival), and the
+                        // intro VARIANT was chosen from the
+                        // async design state — the default
+                        // (Nocturne) composed first, then the
+                        // stored face swapped the intro mid-
+                        // start. Now:
+                        //  - the intro face is latched ONCE from
+                        //    the splash mirror (the same
+                        //    synchronous record the window theme
+                        //    reads in onCreate; written every
+                        //    session since code 126), falling
+                        //    back to the loaded design state for
+                        //    the one start that has no mirror;
+                        //  - both intros cover OPAQUELY from
+                        //    their first frame (the M3 intro's
+                        //    surface no longer fades in), so the
+                        //    shell — composed beneath from the
+                        //    same frame, its loading proceeding
+                        //    UNDER the intro — never paints
+                        //    visibly before the branded moment;
+                        //  - the gate composes the intro until
+                        //    the intro itself reports settled
+                        //    (onSettled), then never again this
+                        //    composition. Warm starts settle at
+                        //    once through the once-per-process
+                        //    claim and stay instant.
+                        val introMirrorDesign = remember {
+                            runCatching {
+                                container.applicationContext
+                                    .getSharedPreferences(
+                                        "splash_mirror",
+                                        android.content.Context
+                                            .MODE_PRIVATE
+                                    )
+                                    .getString("design", null)
+                            }.getOrNull()
+                        }
+                        var introNocturne by remember {
+                            mutableStateOf(
+                                introMirrorDesign?.let {
+                                    it == app.xreader.data.prefs
+                                        .AppDesign.NOCTURNE.name
+                                }
                             )
                         }
-                        // Code 121 (R39): TWO gates, two records,
-                        // never interacting.
+                        LaunchedEffect(designState.design) {
+                            if (introNocturne == null) {
+                                introNocturne =
+                                    designState.design ==
+                                        app.xreader.data.prefs
+                                            .AppDesign.NOCTURNE
+                            }
+                        }
+                        var introSettled by remember {
+                            mutableStateOf(false)
+                        }
+                        val introAnimations = motionEnabled &&
+                            launchMotionTier !=
+                                SpringMotionEngine.MotionTier.Minimal &&
+                            designState.launchIntro
+                        if (!introSettled) {
+                            when (introNocturne) {
+                                // No mirror and the design state
+                                // has not landed yet: a plain
+                                // opaque cover in the theme's own
+                                // surface for the beat, so the
+                                // shell cannot flash uncovered.
+                                null -> Box(
+                                    Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            androidx.compose.material3
+                                                .MaterialTheme
+                                                .colorScheme.surface
+                                        )
+                                )
+                                true -> LaunchIntro(
+                                    libraryReady = libraryReady,
+                                    animationsEnabled =
+                                        introAnimations,
+                                    onSettled = {
+                                        introSettled = true
+                                    }
+                                )
+                                // Code 120 (S2): in the Material
+                                // 3 design the launch intro is the
+                                // plain spec surface — wordmark on
+                                // the scheme surface. The spring
+                                // intro is Nocturne's and stays
+                                // Nocturne's. The intro's own
+                                // Show/Skip knob (§2.11 Advanced)
+                                // gates both.
+                                false -> app.xreader.ui.start
+                                    .M3LaunchIntro(
+                                        libraryReady = libraryReady,
+                                        animationsEnabled =
+                                            introAnimations,
+                                        onSettled = {
+                                            introSettled = true
+                                        }
+                                    )
+                            }
+                        }
+                        // Code 121 (R39): TWO gates, two records.
+                        // Code 128: ONE showcase leads; the reveal
+                        // is its fallback.
                         //
-                        // (A) THE REVEAL — for a design-carrying
-                        // update. Its record is RevealPrefs (sole
-                        // reader: this gate; sole writer: the
-                        // reveal's own terminal actions below).
-                        // Exact gate: the installed code has
-                        // crossed DESIGN_CARRYING_CODE (121),
-                        // the reveal has not been seen for it,
-                        // the install is ESTABLISHED (the Room
-                        // database file existed at container
-                        // construction — fresh installs take the
-                        // onboarding branch above and never reach
-                        // here), and the ACTIVE design is not the
-                        // design being revealed (code 121: not
-                        // Nocturne-gated for M3; code 123: not
-                        // already Editorial). It composes in this
+                        // (A) THE RELEASE SHOWCASE — the primary
+                        // gate. Wears the active design; its
+                        // record is ShowcasePrefs (sole reader:
+                        // this gate; sole writer: the showcase's
+                        // terminal actions below — Skip / Done /
+                        // Back; code 125 (F4): it does NOT share
+                        // the GamePrefs store with the Me note —
+                        // that sharing let a Me-note dismissal
+                        // write the showcase's seen record and
+                        // suppress it, the code-120 conviction).
+                        // When the reveal's conditions ALSO hold
+                        // (the installed code has crossed
+                        // DESIGN_CARRYING_CODE, the reveal is
+                        // unseen for it, the install is
+                        // ESTABLISHED — the Room database file
+                        // existed at container construction;
+                        // fresh installs take the onboarding
+                        // branch above and never reach here — and
+                        // the ACTIVE design is not Editorial),
+                        // the showcase OPENS with the design card:
+                        // the Material 3 design presented as
+                        // itself, with Try / Keep. Try switches
+                        // the design via DesignPrefs — the only
+                        // door besides Customise that may, and
+                        // only on tap — and settles BOTH records;
+                        // any finish of a design-led showing
+                        // settles both records too, so the reveal
+                        // never repeats what the showcase already
+                        // presented. Nobody is ever auto-switched.
+                        //
+                        // (B) THE REVEAL — the fallback, for an
+                        // install whose showcase gate is closed
+                        // (already seen for this code) but whose
+                        // reveal is still unseen. Its record is
+                        // RevealPrefs (sole reader: this gate;
+                        // sole writer: its own terminal actions
+                        // below, and the design-led showcase's
+                        // finish in (A)). It composes in this
                         // shell branch only, so a Recovery detour
                         // DELAYS it — Recovery replaces this
                         // branch, and once Continue resolves it
                         // the gate is re-evaluated and the reveal
                         // fires; the detour cannot eat it. It is
                         // a Dialog: truly modal, input beneath
-                        // blocked. Try switches the design via
-                        // DesignPrefs — the only door besides
-                        // Customise that may, and only on tap.
-                        //
-                        // (B) THE LEGACY SHOWCASE — for updates
-                        // carrying no new design. Wears the
-                        // active design; its record is
-                        // ShowcasePrefs (sole reader: this gate;
-                        // sole writer: the showcase's own
-                        // terminal actions below — Skip / Done /
-                        // Back). Code 125 (F4): it NO LONGER
-                        // shares the GamePrefs store with the Me
-                        // note — that sharing let a Me-note
-                        // dismissal write the showcase's seen
-                        // record and suppress it (the code-120
-                        // conviction, still live for this gate
-                        // until this build). It is suppressed
-                        // while the reveal is pending or showing,
-                        // so the two never stack; finishing it
-                        // writes only its own store.
+                        // blocked.
                         val revealPrefs = remember {
                             app.xreader.ui.update.RevealPrefs(
                                 container.applicationContext
@@ -575,7 +659,73 @@ class MainActivity : FragmentActivity() {
                                 designState.design !=
                                     app.xreader.data.prefs.AppDesign
                                         .EDITORIAL
-                        if (revealGate) {
+                        // Code 128: the showcase gate leads;
+                        // the design card rides it when the
+                        // reveal's conditions hold (see (A)
+                        // above); the reveal below is the
+                        // fallback for a closed showcase gate.
+                        val showcaseGate =
+                            !showcaseDismissed &&
+                                installedCode > 0 &&
+                                showcaseSeen < installedCode &&
+                                (showcaseSeen > 0 ||
+                                    container.databaseFileExisted)
+                        val designCard =
+                            showcaseGate &&
+                                installedCode >=
+                                    app.xreader.ui.update.RevealPrefs
+                                        .DESIGN_CARRYING_CODE &&
+                                revealSeen <
+                                    app.xreader.ui.update.RevealPrefs
+                                        .DESIGN_CARRYING_CODE &&
+                                container.databaseFileExisted &&
+                                designState.design !=
+                                    app.xreader.data.prefs.AppDesign
+                                        .EDITORIAL
+                        // Code 128 (re-check note): both
+                        // dialogs also wait for the intro to
+                        // settle — a Dialog is its own window
+                        // and could otherwise paint over the
+                        // still-playing branded intro, which
+                        // would then finish unseen behind it.
+                        // The intro gates the whole app.
+                        if (introSettled && showcaseGate) {
+                            app.xreader.ui.update.WhatsNewShowcase(
+                                designState = designState,
+                                showDesignCard = designCard,
+                                onTryDesign = {
+                                    showcaseDismissed = true
+                                    activityScope.launch {
+                                        container.designPrefs
+                                            .setDesign(
+                                                app.xreader.data.prefs
+                                                    .AppDesign.EDITORIAL
+                                            )
+                                        revealPrefs.setRevealSeen(
+                                            installedCode
+                                        )
+                                        showcasePrefs
+                                            .setShowcaseSeen(
+                                                installedCode
+                                            )
+                                    }
+                                },
+                                onFinish = {
+                                    showcaseDismissed = true
+                                    activityScope.launch {
+                                        showcasePrefs
+                                            .setShowcaseSeen(
+                                                installedCode
+                                            )
+                                        if (designCard) {
+                                            revealPrefs.setRevealSeen(
+                                                installedCode
+                                            )
+                                        }
+                                    }
+                                }
+                            )
+                        } else if (introSettled && revealGate) {
                             app.xreader.ui.update.WhatsNewRevealEditorial(
                                 designState = designState,
                                 onTryDesign = {
@@ -597,23 +747,6 @@ class MainActivity : FragmentActivity() {
                                         revealPrefs.setRevealSeen(
                                             installedCode
                                         )
-                                    }
-                                }
-                            )
-                        } else if (!showcaseDismissed &&
-                            installedCode > 0 &&
-                            showcaseSeen < installedCode &&
-                            (showcaseSeen > 0 ||
-                                container.databaseFileExisted)
-                        ) {
-                            app.xreader.ui.update.WhatsNewShowcase(
-                                onFinish = {
-                                    showcaseDismissed = true
-                                    activityScope.launch {
-                                        showcasePrefs
-                                            .setShowcaseSeen(
-                                                installedCode
-                                            )
                                     }
                                 }
                             )

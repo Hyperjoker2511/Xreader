@@ -1032,12 +1032,29 @@ fun RepoSourcesScreen(
                                     selected = language != null,
                                     onClick = { languageMenuOpen = true }
                                 )
+                                // Code 128 (audit E1): the menu
+                                // wears the face's menu dress —
+                                // the SelectionBar menu's Nocturne
+                                // form (16dp capsule shape,
+                                // surfaceContainerHigh, 1dp
+                                // outlineVariant border), not the
+                                // bare stock menu.
                                 androidx.compose.material3
                                     .DropdownMenu(
                                         expanded = languageMenuOpen,
                                         onDismissRequest = {
                                             languageMenuOpen = false
-                                        }
+                                        },
+                                        shape = RoundedCornerShape(16.dp),
+                                        containerColor =
+                                            MaterialTheme.colorScheme
+                                                .surfaceContainerHigh,
+                                        border = androidx.compose
+                                            .foundation.BorderStroke(
+                                                1.dp,
+                                                MaterialTheme.colorScheme
+                                                    .outlineVariant
+                                            )
                                     ) {
                                         androidx.compose.material3
                                             .DropdownMenuItem(
