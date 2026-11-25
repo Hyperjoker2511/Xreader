@@ -48,10 +48,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckBox
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LibraryBooks
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MenuBook
@@ -2475,9 +2479,7 @@ private fun ManageShelvesDialog(
                                             }
                                         ) {
                                             androidx.compose.material3.Icon(
-                                                androidx.compose.material
-                                                    .icons.Icons.Default
-                                                    .KeyboardArrowUp,
+                                                Icons.Default.KeyboardArrowUp,
                                                 contentDescription =
                                                     "Move up"
                                             )
@@ -2488,9 +2490,7 @@ private fun ManageShelvesDialog(
                                             }
                                         ) {
                                             androidx.compose.material3.Icon(
-                                                androidx.compose.material
-                                                    .icons.Icons.Default
-                                                    .KeyboardArrowDown,
+                                                Icons.Default.KeyboardArrowDown,
                                                 contentDescription =
                                                     "Move down"
                                             )
@@ -2502,8 +2502,7 @@ private fun ManageShelvesDialog(
                                             }
                                         ) {
                                             androidx.compose.material3.Icon(
-                                                androidx.compose.material
-                                                    .icons.Icons.Default.Edit,
+                                                Icons.Default.Edit,
                                                 contentDescription =
                                                     "Rename shelf"
                                             )
@@ -2514,8 +2513,7 @@ private fun ManageShelvesDialog(
                                             }
                                         ) {
                                             androidx.compose.material3.Icon(
-                                                androidx.compose.material
-                                                    .icons.Icons.Default.Delete,
+                                                Icons.Default.Delete,
                                                 contentDescription =
                                                     "Delete shelf",
                                                 tint = MaterialTheme
