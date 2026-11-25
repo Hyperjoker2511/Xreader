@@ -29,6 +29,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PlayArrow
@@ -59,10 +60,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -550,9 +549,10 @@ private fun EditorialBookDemo() {
  * auto-switched. The standalone reveal
  * ([WhatsNewRevealEditorial]) remains as the fallback for
  * an install whose showcase gate is closed but whose reveal
- * is still unseen. Cards 2+ present the release's features
- * — TXT books, the opening, Ask AI's page, the book page,
- * the PDF fixes, History — each with its own small
+ * is still unseen. Cards 2+ present the app's features the
+ * way a first-time reader meets them — every format in one
+ * reader, TXT books, Ask AI's page, making the app yours,
+ * the book page, PDF highlights — each with its own small
  * animation or live demo of real atoms, never a placeholder.
  */
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
@@ -603,65 +603,76 @@ private fun WhatsNewShowcasePager(
     // Code 127 (audit G1): the Nocturne chrome — glass
     // feature cards and the kit's pills — under Nocturne;
     // the Material 3 face keeps its Card + Button form.
-    // Code 128: the release set (draft order: TXT, the
-    // opening, Ask AI, the book page, PDF, History). When
-    // the design card leads, it is composed inside
+    // Code 128 set, copy rewritten in code 129 for
+    // first-time readers: the cards present the app's
+    // features as features, in this order — every format
+    // in one reader, TXT books, Ask AI's page, making the
+    // app yours, the book page, PDF highlights. When the
+    // design card leads, it is composed inside
     // EditorialThemeRoot as itself (below); the feature
     // cards wear the active face as before.
     val nocturne = !app.xreader.ui.theme.isEditorialDesign()
     val features = remember {
         listOf(
             ShowcaseFeature(
-                title = "TXT books, fully read",
-                body = "Plain-text books open as real books " +
-                    "now: chapters are detected for you, " +
-                    "encodings like GBK, Big5 and Russian are " +
-                    "read correctly — with an encoding door on " +
-                    "the book page — and chapters can be " +
-                    "re-detected any time.",
+                title = "Every format, one reader",
+                body = "Novels, EPUB, PDF and TXT books " +
+                    "and manga all live in one Library and " +
+                    "open in one reader — every book you " +
+                    "have, in one place, read the same way.",
+                demo = ShowcaseDemo.FORMATS
+            ),
+            ShowcaseFeature(
+                title = "TXT books read properly",
+                body = "Open a plain-text book and its " +
+                    "chapters are found for you. Encodings " +
+                    "like GBK, Big5, Russian and more are " +
+                    "picked up on their own, there is an " +
+                    "encoding door on the book page when a " +
+                    "file needs a nudge, and you can switch " +
+                    "between Simplified and Traditional " +
+                    "Chinese.",
                 demo = ShowcaseDemo.TXT
             ),
             ShowcaseFeature(
-                title = "A proper opening",
-                body = "Xreader opens with its mark now: the " +
-                    "logo animates in, in your design's " +
-                    "colours, and hands over to your Library " +
-                    "the moment it is ready.",
-                demo = ShowcaseDemo.SPLASH
-            ),
-            ShowcaseFeature(
                 title = "Ask AI has its own page",
-                body = "Ask AI opens as its own full page — " +
-                    "Summarize, Catch me up, Translate, " +
-                    "Illustrate and Lore chat — with Back " +
-                    "taking you exactly where you were.",
+                body = "Ask AI opens as its own full page, " +
+                    "with room to read and think: Summarize " +
+                    "a chapter, Catch me up on the story, " +
+                    "Translate a passage, Illustrate a " +
+                    "moment, or chat about the lore — and " +
+                    "Back takes you straight back to your " +
+                    "book.",
                 demo = ShowcaseDemo.AI_PAGE
             ),
             ShowcaseFeature(
-                title = "The book page, tidied",
-                body = "Chapters show their release dates, a " +
-                    "pull down from the top refreshes the " +
-                    "list, and Download all sits beside " +
-                    "per-chapter downloads.",
+                title = "Make it yours",
+                body = "Two designs to choose from, " +
+                    "colours you pick yourself, and text " +
+                    "sized the way you like to read — every " +
+                    "choice lives in one Customise space, " +
+                    "so you set it up once and just read.",
+                demo = ShowcaseDemo.MAKE_YOURS
+            ),
+            ShowcaseFeature(
+                title = "The book page",
+                body = "Everything about your book on one " +
+                    "page: chapters with their release " +
+                    "dates, Download all for the whole book " +
+                    "or a download for a single chapter, " +
+                    "and a gentle pull down from the top " +
+                    "to refresh the list.",
                 demo = ShowcaseDemo.BOOK_PAGE
             ),
             ShowcaseFeature(
-                title = "PDF, fixed",
-                body = "A highlight is a see-through wash " +
-                    "now — the words stay readable through " +
-                    "the colour — and the page strip shows " +
-                    "the real page on every thumbnail, not a " +
-                    "dark card with a number.",
+                title = "PDF highlights you can read through",
+                body = "Highlight a line in a PDF and the " +
+                    "colour sits as a see-through wash — " +
+                    "the words stay clear underneath. And " +
+                    "in the page strip, every preview shows " +
+                    "your real page, so you can see where " +
+                    "you are going.",
                 demo = ShowcaseDemo.PDF_FIXES
-            ),
-            ShowcaseFeature(
-                title = "History, fixed",
-                body = "No more red behind the cards, the " +
-                    "reading pulse shows its numbers again, " +
-                    "every card carries its progress and its " +
-                    "actions whole, and Clear history sits in " +
-                    "the open.",
-                demo = ShowcaseDemo.HISTORY
             )
         )
     }
@@ -913,16 +924,16 @@ private fun ShowcaseFeatureContent(feature: ShowcaseFeature) {
             when (feature.demo) {
                 ShowcaseDemo.TXT ->
                     TxtBooksDemo()
-                ShowcaseDemo.SPLASH ->
-                    SplashDemo()
+                ShowcaseDemo.FORMATS ->
+                    FormatsDemo()
                 ShowcaseDemo.AI_PAGE ->
                     AskAiPageDemo()
                 ShowcaseDemo.BOOK_PAGE ->
                     BookPageDemo()
                 ShowcaseDemo.PDF_FIXES ->
                     PdfFixesDemo()
-                ShowcaseDemo.HISTORY ->
-                    HistoryFixedDemo()
+                ShowcaseDemo.MAKE_YOURS ->
+                    MakeItYoursDemo()
             }
         }
         Column(
@@ -953,7 +964,7 @@ private data class ShowcaseFeature(
 )
 
 private enum class ShowcaseDemo {
-    TXT, SPLASH, AI_PAGE, BOOK_PAGE, PDF_FIXES, HISTORY
+    TXT, FORMATS, AI_PAGE, BOOK_PAGE, PDF_FIXES, MAKE_YOURS
 }
 
 /**
@@ -1074,62 +1085,120 @@ private fun TxtBooksDemo() {
                 )
             }
         }
+        // Code 129: the Simplified ⇄ Traditional switch the
+        // caption names, as its own pill on its own row —
+        // adding it to the row above would have pushed that
+        // row past the demo's 252dp content box.
+        Surface(
+            color = scheme.secondaryContainer,
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Text(
+                "Simplified ⇄ Traditional",
+                style = MaterialTheme.typography.labelMedium,
+                color = scheme.onSecondaryContainer,
+                maxLines = 1,
+                modifier = Modifier.padding(
+                    horizontal = 10.dp, vertical = 6.dp
+                )
+            )
+        }
     }
 }
 
 /**
- * Demo: the opening (code 128) — the branded intro in
- * miniature: the mark and the wordmark fade and settle in
- * on a loop, on the intro's own dark ground. Fixed sizes,
- * centred; nothing is measured from anything else.
+ * Demo: every format, one reader (code 129) — a Library
+ * shelf miniature: four cover-shaped tiles in a fixed 2×2
+ * grid, one per format (EPUB, PDF, TXT, Manga), each cover
+ * in a container colour of the active scheme with its
+ * format named on the cover and a short kind line under
+ * it, and one pill under the grid naming the one reader
+ * they all open in. All geometry is fixed: the card is
+ * 280dp wide with 14dp padding (252dp of content), each
+ * grid row is two weight-1 tiles, every cover is 52dp
+ * tall — nothing sizes itself from a wrap-content parent,
+ * so the grid lays out the same at 411dp width as the
+ * other demos do.
  */
 @Composable
-private fun SplashDemo() {
+private fun FormatsDemo() {
     val scheme = MaterialTheme.colorScheme
-    val transition = rememberInfiniteTransition(label = "splashDemo")
-    val appear by transition.animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1400),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "splashDemoAppear"
+    val formats = listOf(
+        Triple("EPUB", "Novels & books", scheme.primaryContainer to scheme.onPrimaryContainer),
+        Triple("PDF", "Documents", scheme.tertiaryContainer to scheme.onTertiaryContainer),
+        Triple("TXT", "Plain-text books", scheme.secondaryContainer to scheme.onSecondaryContainer),
+        Triple("Manga", "Comics", scheme.surfaceContainerHigh to scheme.onSurface)
     )
-    Box(
+    Column(
         Modifier
             .width(280.dp)
-            .height(190.dp)
             .clip(RoundedCornerShape(16.dp))
-            .background(Color(0xFF0B0B0F)),
-        contentAlignment = Alignment.Center
+            .background(scheme.surface)
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier
-                .alpha(0.25f + 0.75f * appear)
-                .scale(0.94f + 0.06f * appear)
+        Text(
+            "Library",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold
+        )
+        formats.chunked(2).forEach { rowFormats ->
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                rowFormats.forEach { (format, kind, colours) ->
+                    Column(
+                        Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(colours.first),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                format,
+                                style = MaterialTheme.typography
+                                    .titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = colours.second,
+                                maxLines = 1
+                            )
+                        }
+                        Text(
+                            kind,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = scheme.onSurfaceVariant,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+        Surface(
+            color = scheme.primary,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.align(Alignment.CenterHorizontally)
         ) {
-            Box(
-                Modifier
-                    .size(52.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(scheme.primary),
-                contentAlignment = Alignment.Center
+            Row(
+                Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                Icon(
+                    Icons.Filled.MenuBook, null,
+                    tint = scheme.onPrimary,
+                    modifier = Modifier.size(14.dp)
+                )
                 Text(
-                    "X",
-                    style = MaterialTheme.typography.headlineMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = scheme.onPrimary
+                    "All open in one reader",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = scheme.onPrimary,
+                    maxLines = 1
                 )
             }
-            Text(
-                "Xreader",
-                style = MaterialTheme.typography.titleLarge,
-                color = Color.White
-            )
         }
     }
 }
@@ -1402,12 +1471,23 @@ private fun AskAiPageDemo() {
 }
 
 /**
- * Demo: the History card fixed — the pulse with its real
- * numbers above the labels, and one card with its progress
- * bar, its Continue pill and its Remove, whole.
+ * Demo: make it yours (code 129) — choice in miniature:
+ * the two designs side by side as fixed miniatures (the
+ * design card's own atoms are full-width page furniture,
+ * too wide to reuse inside a 121dp half, so each design
+ * is drawn here at miniature scale in its own colours —
+ * paper with a sage accent, near-black with violet), a
+ * row of five colour swatches with the picked one
+ * carrying a check, and a text-size slider miniature
+ * between a small A and a large A. All geometry is
+ * fixed: the card is 280dp wide with 14dp padding (252dp
+ * of content), the two miniatures split it by weight at
+ * a fixed 72dp tall, swatches are 28dp circles and the
+ * slider track is 4dp — nothing sizes itself from a
+ * wrap-content parent.
  */
 @Composable
-private fun HistoryFixedDemo() {
+private fun MakeItYoursDemo() {
     val scheme = MaterialTheme.colorScheme
     Column(
         Modifier
@@ -1417,85 +1497,197 @@ private fun HistoryFixedDemo() {
             .padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(Modifier.fillMaxWidth()) {
-            listOf(
-                "42 min" to "read today",
-                "3" to "books today",
-                "12" to "chapters",
-                "180" to "EXP today"
-            ).forEach { (value, label) ->
-                Column(
-                    Modifier.weight(1f),
-                    horizontalAlignment = Alignment.CenterHorizontally
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Material 3 miniature: paper ground, sage accent.
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(72.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFFF5F0E6))
+                        .border(
+                            2.dp, scheme.primary,
+                            RoundedCornerShape(10.dp)
+                        )
+                        .padding(8.dp)
                 ) {
-                    Text(
-                        value,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1
-                    )
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = scheme.onSurfaceVariant,
-                        maxLines = 1
-                    )
+                    Column(
+                        verticalArrangement =
+                            Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            Modifier
+                                .width(44.dp)
+                                .height(7.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color(0xFF3E4A3D))
+                        )
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(22.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFDCE5D8))
+                        )
+                        Box(
+                            Modifier
+                                .width(30.dp)
+                                .height(10.dp)
+                                .clip(RoundedCornerShape(5.dp))
+                                .background(Color(0xFF6B8563))
+                        )
+                    }
+                    Box(
+                        Modifier
+                            .size(18.dp)
+                            .align(Alignment.TopEnd)
+                            .clip(CircleShape)
+                            .background(scheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.Check, null,
+                            tint = scheme.onPrimary,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                }
+                Text(
+                    "Material 3",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+            // Nocturne miniature: near-black ground, violet.
+            Column(
+                Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(72.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0xFF0B0B0F))
+                        .padding(8.dp)
+                ) {
+                    Column(
+                        verticalArrangement =
+                            Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            Modifier
+                                .width(44.dp)
+                                .height(7.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(Color.White)
+                        )
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(22.dp)
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFF1D1D26))
+                        )
+                        Box(
+                            Modifier
+                                .width(30.dp)
+                                .height(10.dp)
+                                .clip(RoundedCornerShape(5.dp))
+                                .background(Color(0xFF8B5CF6))
+                        )
+                    }
+                }
+                Text(
+                    "Nocturne",
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            listOf(
+                Color(0xFF8B5CF6), Color(0xFF4C7DD9),
+                Color(0xFF6B8563), Color(0xFFD97A4C),
+                Color(0xFFD94C7A)
+            ).forEachIndexed { index, swatch ->
+                Box(
+                    Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(swatch),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (index == 0) {
+                        Icon(
+                            Icons.Filled.Check, null,
+                            tint = Color.White,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
                 }
             }
         }
-        Surface(
-            color = scheme.surfaceContainerLow,
-            shape = RoundedCornerShape(12.dp),
-            modifier = Modifier.fillMaxWidth()
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Column(
-                Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Text(
+                "A",
+                fontSize = 12.sp,
+                color = scheme.onSurfaceVariant
+            )
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(14.dp)
             ) {
-                Text(
-                    "Nano Machine",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    "Chapter 214 · 0% through the book",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onSurfaceVariant
-                )
-                androidx.compose.material3.LinearProgressIndicator(
-                    progress = { 0f },
-                    modifier = Modifier
+                Box(
+                    Modifier
+                        .align(Alignment.Center)
                         .fillMaxWidth()
                         .height(4.dp)
-                        .clip(RoundedCornerShape(2.dp)),
-                    color = scheme.primary,
-                    trackColor = scheme.surfaceContainerHighest
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(scheme.surfaceContainerHigh)
                 )
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Box(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxWidth(0.6f)
+                        .height(4.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(scheme.primary)
+                )
+                // The thumb rides the filled portion's end:
+                // a 60%-width overlay aligned to the start,
+                // its end centred on the thumb.
+                Box(
+                    Modifier
+                        .align(Alignment.CenterStart)
+                        .fillMaxWidth(0.6f)
+                        .fillMaxHeight(),
+                    contentAlignment = Alignment.CenterEnd
                 ) {
-                    Surface(
-                        color = scheme.primary,
-                        shape = RoundedCornerShape(18.dp)
-                    ) {
-                        Text(
-                            "Continue · Ch. 214",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = scheme.onPrimary,
-                            modifier = Modifier.padding(
-                                horizontal = 12.dp, vertical = 7.dp
-                            )
-                        )
-                    }
-                    Text(
-                        "Remove",
-                        fontSize = 13.sp,
-                        color = scheme.onSurface
+                    Box(
+                        Modifier
+                            .offset(x = 7.dp)
+                            .size(14.dp)
+                            .clip(CircleShape)
+                            .background(scheme.primary)
                     )
                 }
             }
+            Text(
+                "A",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -1520,7 +1712,7 @@ private fun BookPageDemo() {
             "Chapter 214" to "3 days ago",
             "Chapter 215" to "Yesterday",
             "Chapter 216" to "12 Nov 2026"
-        ).forEach { (title, date) ->
+        ).forEachIndexed { index, (title, date) ->
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1549,6 +1741,19 @@ private fun BookPageDemo() {
                         date,
                         style = MaterialTheme.typography.bodySmall,
                         color = scheme.onSurfaceVariant
+                    )
+                }
+                if (index == 1) {
+                    // Code 129: the per-chapter download the
+                    // caption names, on one row — a fixed
+                    // 20dp icon at the row's end; the row's
+                    // other geometry is unchanged.
+                    Spacer(Modifier.weight(1f))
+                    Icon(
+                        Icons.Filled.Download,
+                        contentDescription = null,
+                        tint = scheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
                     )
                 }
             }

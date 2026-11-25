@@ -76,6 +76,20 @@ import kotlinx.coroutines.delay
  *  - [onSettled] reports every terminal path (shown-and-done,
  *    refused, claimed elsewhere, reduced motion) so the
  *    caller can stop composing the gate entirely.
+ *
+ * Code 129 (the no-splash conviction, owner's code-128 proof:
+ * the app opened straight into the Library): eligibility no
+ * longer samples `libraryReady`. The old eligibility folded
+ * the ready signal in, and on a fast established install the
+ * Library's first non-loading emission lands before this
+ * intro's claim effect runs (the shell is composed — and its
+ * ready watcher started — before the intro in MainActivity's
+ * Box), so the intro settled at once without painting a
+ * frame. Readiness now only DISMISSES: it is latched in
+ * `readySeen` and lands once the enter fade completes (the
+ * code-127 hold), bounded by the same 1,200 ms cap — the
+ * same contract as Nocturne's LaunchIntroController, whose
+ * `libraryReady` refusal was removed in the same build.
  */
 @OptIn(
     androidx.compose.material3
@@ -91,8 +105,11 @@ fun M3LaunchIntro(
     // so the shell never flashes uncovered before the cover
     // lands; the effect below makes the formal claim and
     // settles at once if the gate refuses.
+    // Code 129: eligibility never samples `libraryReady` —
+    // readiness dismisses (via the readySeen latch below), it
+    // never refuses the show.
     val eligibleAtCompose = !LaunchIntroShown.hasShown() &&
-        animationsEnabled && !libraryReady
+        animationsEnabled
     var mounted by remember { mutableStateOf(eligibleAtCompose) }
     var exiting by remember { mutableStateOf(false) }
     var dismissed by remember { mutableStateOf(false) }

@@ -1,8 +1,6 @@
 package app.xreader.ui.common
 
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -13,6 +11,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
+import app.xreader.core.motion.SpringMotionEngine
+import app.xreader.core.motion.toSpec
 
 /**
  * Tactile press tilt (v1.0.2, R30 — the fork's one delight worth
@@ -20,6 +20,11 @@ import androidx.compose.ui.input.pointer.pointerInput
  * touch point and settles at ~0.98 scale; on release it springs
  * back. Motion is the subtle Xreader register, never the bouncy
  * one. A no-op under Reduce Motion (the caller passes [enabled]).
+ *
+ * Code-129 motion pass: the lean and the scale ride the
+ * engine's MicroPress profile (the subtle press register this
+ * header always claimed) instead of the ad-hoc Compose
+ * MediumBouncy / MediumLow constants they shipped with.
  */
 fun Modifier.pressTilt(enabled: Boolean = true): Modifier = composed {
     if (!enabled) return@composed this
@@ -27,26 +32,17 @@ fun Modifier.pressTilt(enabled: Boolean = true): Modifier = composed {
     var pressPoint by remember { mutableStateOf(Offset(0.5f, 0.5f)) }
     val rotationX by animateFloatAsState(
         targetValue = if (pressed) (0.5f - pressPoint.y) * 6f else 0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
-        ),
+        animationSpec = SpringMotionEngine.MicroPress.toSpec(),
         label = "pressTiltX"
     )
     val rotationY by animateFloatAsState(
         targetValue = if (pressed) (pressPoint.x - 0.5f) * 6f else 0f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
-        ),
+        animationSpec = SpringMotionEngine.MicroPress.toSpec(),
         label = "pressTiltY"
     )
     val scale by animateFloatAsState(
         targetValue = if (pressed) 0.98f else 1f,
-        animationSpec = spring(
-            dampingRatio = Spring.DampingRatioMediumBouncy,
-            stiffness = Spring.StiffnessMediumLow
-        ),
+        animationSpec = SpringMotionEngine.MicroPress.toSpec(),
         label = "pressTiltScale"
     )
     this

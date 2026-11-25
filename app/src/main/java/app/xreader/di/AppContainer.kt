@@ -1487,6 +1487,14 @@ class AppContainer(
         // pre- Compose window theme (and the Android 12+ splash)
         // opens in the user's own design colours. Written on
         // every design-state emission; read once per cold start.
+        // Code 129: the record also carries the writing build's
+        // version code, and its contract is narrowed in writing:
+        // it may steer ONLY the window theme and which intro
+        // FACE a cold start latches — never WHETHER the branded
+        // intro shows. The show decision is process-local (the
+        // LaunchIntroShown once-gate plus the motion decision);
+        // no persisted record, from this or any earlier build,
+        // may suppress the intro on a fresh cold start.
         appScope.launch {
             designPrefs.state.collect { designState ->
                 runCatching {
@@ -1494,6 +1502,7 @@ class AppContainer(
                         .edit()
                         .putString("design", designState.design.name)
                         .putString("theme_mode", designState.themeMode.name)
+                        .putInt("version", BuildConfig.VERSION_CODE)
                         .apply()
                 }
             }

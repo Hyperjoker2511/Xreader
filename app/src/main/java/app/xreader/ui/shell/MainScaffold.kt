@@ -1248,6 +1248,23 @@ internal fun XreaderNavHost(
     appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
     packViewModel: app.xreader.ui.sources.ProviderPackViewModel
 ) {
+    // Code-129 motion pass: the host's one motion decision.
+    // The shells pass the Appearance reduce-motion preference;
+    // under the Material 3 family the user's three-way Motion
+    // choice joins it here — a REDUCED pick reduces every
+    // transition and every hosted surface that takes this
+    // flag, exactly as EditorialThemeRoot already maps it
+    // onto the face's MotionScheme. (STANDARD keeps the
+    // spring travel; only its M3 component specs soften, via
+    // that same theme mapping.) The choice is M3-scoped
+    // state, so it joins only while an M3-family design is
+    // active — Nocturne's decision stays the Appearance
+    // preference alone, exactly as before.
+    val hostDesign = app.xreader.ui.theme.LocalDesignState.current
+    val effectiveReduceMotion = reduceMotion ||
+        (hostDesign.design != app.xreader.data.prefs.AppDesign.NOCTURNE &&
+            hostDesign.motionChoice ==
+                app.xreader.data.prefs.M3MotionChoice.REDUCED)
     val scope = rememberCoroutineScope()
     // v1.5.1 (item 7): the same content-navigation guard as in
     // MainScaffold, scoped to this host (destinations live here):
@@ -1377,10 +1394,14 @@ internal fun XreaderNavHost(
     // simply there at the tap and the dock marker's travel was
     // the only motion (the fade-through survives only in the
     // Novels ↔ Manga side switch and the reduced-motion
-    // crossfade). Micro-build M (2026-11-21): the adapters now
-    // run SlideFade — the owner's picked ColorOS 17 default
+    // crossfade). Micro-build M (2026-11-21): the adapters ran
+    // SlideFade — the owner's picked ColorOS 17 default
     // (direction-aware slide + fade + scale; see MotionSpecs)
     // — while the reduced-motion crossfade is unchanged.
+    // Code-129 motion pass (2026-11-25): SlideFade's travel
+    // and scale moved from timed tweens onto the Spatial
+    // spring inside the adapters (geometry and fades kept) —
+    // the spring switch is the tab default now.
     // The stack geometry is still NOT touched.
     val tabRoutes = remember { Tab.entries.map { it.route }.toSet() }
     // Liquid Glass, piece 3 (Dock Glass): the destination content
@@ -1415,8 +1436,8 @@ internal fun XreaderNavHost(
                 tabTravelDirection(
                     initialState.destination.route, targetState.destination.route
                 ),
-                reduceMotion
-            ) else stackEnter(reduceMotion)
+                effectiveReduceMotion
+            ) else stackEnter(effectiveReduceMotion)
         },
         exitTransition = {
             if (SpringMotionEngine.isTabSwitch(
@@ -1427,8 +1448,8 @@ internal fun XreaderNavHost(
                 tabTravelDirection(
                     initialState.destination.route, targetState.destination.route
                 ),
-                reduceMotion
-            ) else stackExit(reduceMotion)
+                effectiveReduceMotion
+            ) else stackExit(effectiveReduceMotion)
         },
         popEnterTransition = {
             if (SpringMotionEngine.isTabSwitch(
@@ -1439,8 +1460,8 @@ internal fun XreaderNavHost(
                 tabTravelDirection(
                     initialState.destination.route, targetState.destination.route
                 ),
-                reduceMotion
-            ) else stackPopEnter(reduceMotion)
+                effectiveReduceMotion
+            ) else stackPopEnter(effectiveReduceMotion)
         },
         popExitTransition = {
             if (SpringMotionEngine.isTabSwitch(
@@ -1451,8 +1472,8 @@ internal fun XreaderNavHost(
                 tabTravelDirection(
                     initialState.destination.route, targetState.destination.route
                 ),
-                reduceMotion
-            ) else stackPopExit(reduceMotion)
+                effectiveReduceMotion
+            ) else stackPopExit(effectiveReduceMotion)
         }
     ) {
         composable(Tab.Library.route) {
@@ -1469,7 +1490,7 @@ internal fun XreaderNavHost(
             LibraryScreen(
                 viewModel = libraryViewModel,
                 coverFile = coverFile,
-                reduceMotion = reduceMotion,
+                reduceMotion = effectiveReduceMotion,
                 onAddBook = onAddBook,
                 onOpenBook = { bookId -> navigateContent("book/$bookId") },
                 // v1.5.6 (§2.2 entry point 2): Library Continue
@@ -1631,7 +1652,7 @@ internal fun XreaderNavHost(
                         container.totalRamMb(),
                         browseAppearance.coverGlow
                     ).tier,
-                reduceMotion = reduceMotion
+                reduceMotion = effectiveReduceMotion
             )
         }
         composable("manageSources") {
@@ -1955,7 +1976,7 @@ internal fun XreaderNavHost(
             DownloadsScreen(
                 viewModel = downloadsViewModel,
                 coverFile = coverFile,
-                reduceMotion = reduceMotion,
+                reduceMotion = effectiveReduceMotion,
                 onMakeEpub = { group: BookDownloads -> onExport(group.book, "epub") },
                 onOpenBook = { bookId -> navigateContent("book/$bookId") },
                 onOpenCustomise = { navController.navigate("customise") },
@@ -2065,7 +2086,7 @@ internal fun XreaderNavHost(
             app.xreader.ui.more.HistoryScreen(
                 viewModel = viewModel,
                 coverFile = coverFile,
-                reduceMotion = reduceMotion,
+                reduceMotion = effectiveReduceMotion,
                 onBack = { navigateToTab(navController, Tab.Library) },
                 // v1.5.6 (§2.2 entry point 3): a History tap
                 // resolves through the routing law.
@@ -2093,7 +2114,7 @@ internal fun XreaderNavHost(
                 viewModel = viewModel,
                 container = container,
                 onBack = { navController.popBackStack() },
-                reduceMotion = reduceMotion,
+                reduceMotion = effectiveReduceMotion,
                 lowRam = remember {
                     val manager = navController.context
                         .getSystemService(android.content.Context.ACTIVITY_SERVICE)
@@ -2511,7 +2532,7 @@ internal fun XreaderNavHost(
             ReaderScreen(
                 viewModel = viewModel,
                 container = container,
-                reduceMotion = reduceMotion,
+                reduceMotion = effectiveReduceMotion,
                 assetFile = assetFile,
                 bookId = bookId,
                 onBack = { navController.popBackStack() },

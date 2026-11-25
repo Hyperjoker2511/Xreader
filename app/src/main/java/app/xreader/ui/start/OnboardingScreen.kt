@@ -75,7 +75,14 @@ fun OnboardingScreen(
      * Nocturne card — the picked colour feeds Nocturne's
      * any-colour generation (the shell writes it as the
      * "Custom" scheme entry). */
-    onPickNocturneColour: (Long) -> Unit = {}
+    onPickNocturneColour: (Long) -> Unit = {},
+    /** Code-129 motion pass: the caller's motion decision
+     * (the same animationsEnabled the launch intro receives —
+     * system animator scale AND the Appearance reduce-motion
+     * preference, via SpringMotionEngine). Before this pass
+     * the pager hardcoded reduceMotion = false and animated
+     * at full travel even for reduce-motion users. */
+    reduceMotion: Boolean = false
 ) {
     var page by remember { mutableIntStateOf(0) }
     // The ask is page 1; the three text pages keep their order
@@ -109,8 +116,8 @@ fun OnboardingScreen(
             targetState = page,
             transitionSpec = {
                 ContentTransform(
-                    sharedAxisXEnter(reduceMotion = false),
-                    sharedAxisXExit(reduceMotion = false)
+                    sharedAxisXEnter(reduceMotion = reduceMotion),
+                    sharedAxisXExit(reduceMotion = reduceMotion)
                 )
             },
             label = "onboardingPage",

@@ -2,8 +2,7 @@ package app.xreader.ui.book
 
 import android.content.Intent
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import app.xreader.core.motion.toSpec
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -2074,10 +2073,15 @@ fun EditorialBookDetail(
                                             scope.launch {
                                                 drag.animateTo(
                                                     0f,
-                                                    spring(
-                                                        stiffness = Spring
-                                                            .StiffnessMediumLow
-                                                    )
+                                                    // Code-129 motion
+                                                    // pass: the rebound
+                                                    // rides the engine's
+                                                    // Spatial spring, not
+                                                    // an ad-hoc Compose
+                                                    // stiffness constant.
+                                                    app.xreader.core.motion
+                                                        .SpringMotionEngine
+                                                        .Spatial.toSpec()
                                                 )
                                             }
                                         }

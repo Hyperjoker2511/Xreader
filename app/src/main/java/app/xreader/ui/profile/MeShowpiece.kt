@@ -1,9 +1,7 @@
 package app.xreader.ui.profile
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -428,10 +426,11 @@ fun IdentityCard3D(
         animationSpec = if (reduceMotion) {
             androidx.compose.animation.core.tween(0)
         } else {
-            spring(
-                dampingRatio = Spring.DampingRatioLowBouncy,
-                stiffness = Spring.StiffnessLow
-            )
+            // Code-129 motion pass: the flip rides the
+            // engine's CelebrationRing profile — the Me
+            // screen's sanctioned celebration family — not
+            // ad-hoc Compose spring constants.
+            SpringMotionEngine.CelebrationRing.toSpec()
         },
         label = "identityFlip"
     )
@@ -489,19 +488,13 @@ fun IdentityCard3D(
             launch {
                 tiltX.animateTo(
                     0f,
-                    spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessLow
-                    )
+                    SpringMotionEngine.CelebrationRing.toSpec()
                 )
             }
             launch {
                 tiltY.animateTo(
                     0f,
-                    spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessLow
-                    )
+                    SpringMotionEngine.CelebrationRing.toSpec()
                 )
             }
         }
@@ -582,21 +575,15 @@ fun IdentityCard3D(
                                     launch {
                                         tiltX.animateTo(
                                             0f,
-                                            spring(
-                                                dampingRatio =
-                                                    Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            )
+                                            SpringMotionEngine
+                                                .CelebrationRing.toSpec()
                                         )
                                     }
                                     launch {
                                         tiltY.animateTo(
                                             0f,
-                                            spring(
-                                                dampingRatio =
-                                                    Spring.DampingRatioMediumBouncy,
-                                                stiffness = Spring.StiffnessLow
-                                            )
+                                            SpringMotionEngine
+                                                .CelebrationRing.toSpec()
                                         )
                                     }
                                 }

@@ -53,7 +53,9 @@ import kotlinx.coroutines.delay
  *  - dismisses when the Library is ready (the caller feeds
  *    [LaunchIntro]'s `libraryReady` from LibraryViewModel's
  *    `loading` flag, threaded out of MainScaffold) — with the
- *    code-127 refinement below;
+ *    code-127 refinement below, and the code-129 correction
+ *    that readiness can only ever DISMISS the intro, never
+ *    refuse it (see the controller's contract);
  *  - HARD CAP: force-dismisses [LaunchIntroController.CAP_MILLIS]
  *    (1,000 ms) after it starts, even if the ready signal never
  *    arrives.
@@ -68,6 +70,23 @@ import kotlinx.coroutines.delay
  *    animation dismisses the intro the instant it is ready,
  *    exactly as before. The controller's own contract is
  *    unchanged — the composable delivers its signal later.
+ *  - CODE 129 (the no-splash conviction, owner's code-128
+ *    proof: the app opened straight into the Library): the
+ *    show decision no longer samples `libraryReady` at all.
+ *    Code 128's gate deferred the decision to this
+ *    composable's begin effect, which runs AFTER the shell's
+ *    ready watcher (MainScaffold is composed before the
+ *    intro in MainActivity's Box, and its watcher effect is
+ *    therefore started first); on a fast established install
+ *    the Library's first non-loading emission lands before
+ *    `begin` evaluates, so `shouldShow(libraryReady = true)`
+ *    refused, the controller settled at DONE, and the gate
+ *    opened with the branded moment never painting a frame.
+ *    Readiness now only dismisses a SHOWING intro (still
+ *    held until the enter animation completes, per code
+ *    127); a Library that is already ready when the intro
+ *    begins simply dismisses it the moment the animation
+ *    completes, exactly as a slower Library does.
  *  - never shows when animations are disabled for this user —
  *    the caller passes the app's full motion decision
  *    (`rememberMotionEnabled(userEnabled = !appearance.reduceMotion)`,
@@ -109,29 +128,31 @@ class LaunchIntroController(
 
     /**
      * The one show decision: a fresh cold start only — not when
-     * this process already showed the intro ([alreadyShown]), not
-     * under reduced motion, and not when the Library is already
-     * ready (no flash over content that beat the intro to screen).
+     * this process already showed the intro ([alreadyShown]) and
+     * not under reduced motion. Library readiness is NOT an
+     * input (code 129): readiness dismisses a showing intro via
+     * [onLibraryReady]; it must never refuse one, because on a
+     * fast install the ready signal can land before this
+     * decision is evaluated and the branded moment would be
+     * skipped whole (the code-128 no-splash proof).
      */
     fun shouldShow(
         alreadyShown: Boolean,
-        reducedMotion: Boolean,
-        libraryReady: Boolean = false
-    ): Boolean = !alreadyShown && !reducedMotion && !libraryReady
+        reducedMotion: Boolean
+    ): Boolean = !alreadyShown && !reducedMotion
 
     /**
      * Attempt to start showing. Returns true exactly once, when
      * the IDLE → SHOWING transition happens; every refusal (already
-     * shown, reduced motion, library already ready, or any repeat
-     * call) settles the controller at DONE and returns false.
+     * shown, reduced motion, or any repeat call) settles the
+     * controller at DONE and returns false.
      */
     fun begin(
         alreadyShown: Boolean,
-        reducedMotion: Boolean,
-        libraryReady: Boolean = false
+        reducedMotion: Boolean
     ): Boolean {
         if (phase != Phase.IDLE) return false
-        if (!shouldShow(alreadyShown, reducedMotion, libraryReady)) {
+        if (!shouldShow(alreadyShown, reducedMotion)) {
             phase = Phase.DONE
             return false
         }
@@ -231,8 +252,12 @@ fun LaunchIntro(
     // unmounts again if the controller refuses. `exiting` drives
     // the exit fade while `mounted` keeps the overlay composed
     // for it. Both mirror the controller, the single decision-maker.
+    // Code 129: eligibility never samples `libraryReady` — a
+    // Library that beat the intro to ready still gets the
+    // branded moment (it dismisses the intro once the enter
+    // animation completes, via the latch below).
     val eligibleAtCompose = !LaunchIntroShown.hasShown() &&
-        animationsEnabled && !libraryReady
+        animationsEnabled
     var mounted by remember { mutableStateOf(eligibleAtCompose) }
     var exiting by remember { mutableStateOf(false) }
     // Code 127: the ready signal and the enter animation's
@@ -246,8 +271,7 @@ fun LaunchIntro(
     LaunchedEffect(Unit) {
         val began = controller.begin(
             alreadyShown = LaunchIntroShown.hasShown(),
-            reducedMotion = !animationsEnabled,
-            libraryReady = libraryReady
+            reducedMotion = !animationsEnabled
         )
         if (!began) {
             mounted = false

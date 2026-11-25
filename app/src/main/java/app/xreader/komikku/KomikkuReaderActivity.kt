@@ -138,7 +138,11 @@ class KomikkuReaderActivity : ComponentActivity() {
                 KomikkuReaderScreen(
                     viewModel = viewModel,
                     volumeTurns = volumeTurns,
-                    onBack = { finish() }
+                    onBack = { finish() },
+                    // Code-129 motion pass: the chrome's
+                    // motion decision, from the appearance
+                    // this Activity already collects.
+                    reduceMotion = appearance.reduceMotion
                 )
             }
         }

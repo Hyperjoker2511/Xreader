@@ -4,7 +4,7 @@ import android.animation.ValueAnimator
 import android.provider.Settings
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
+import app.xreader.core.motion.toSpec
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -74,8 +74,9 @@ private val PressedTrackHeight = 6.dp
 private val ThumbDiameter = 20.dp
 private val MaxRubberBandOverflow = 10.dp
 private const val PressedThumbScale = 1.25f
-private const val SpringDampingRatio = 0.55f
-private const val SpringStiffness = 420f
+// Code-129 motion pass: the elastic spring's numbers live in
+// the engine now (SpringMotionEngine.ElasticPress — stiffness
+// 420, dampingRatio 0.55, preserved verbatim), not as locals.
 private const val MaxStretchScale = 1.30f
 private const val StretchReferenceVelocityPxPerSec = 2400f
 private const val KeyboardStepCount = 20
@@ -230,10 +231,8 @@ fun ElasticSlider(
     var isPressed by remember { mutableStateOf(false) }
     val pressProgress by animateFloatAsState(
         targetValue = if (isPressed && !reducedMotion) 1f else 0f,
-        animationSpec = spring(
-            dampingRatio = SpringDampingRatio,
-            stiffness = SpringStiffness
-        ),
+        animationSpec = app.xreader.core.motion.SpringMotionEngine
+            .ElasticPress.toSpec(),
         label = "elasticPress"
     )
 
@@ -244,10 +243,8 @@ fun ElasticSlider(
     val latestReducedMotion by rememberUpdatedState(reducedMotion)
 
     val springSpec = remember {
-        spring<Float>(
-            dampingRatio = SpringDampingRatio,
-            stiffness = SpringStiffness
-        )
+        app.xreader.core.motion.SpringMotionEngine.ElasticPress
+            .toSpec<Float>()
     }
 
     val semanticsModifier = Modifier.semantics(mergeDescendants = true) {

@@ -185,7 +185,14 @@ fun komikkuCanvasColor(theme: Int, automaticIsDark: Boolean): Color = when (them
 fun KomikkuReaderScreen(
     viewModel: KomikkuReaderViewModel,
     volumeTurns: SharedFlow<Int>,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    /** Code-129 motion pass: the host Activity's motion
+     * decision (Appearance reduce-motion, collected there
+     * like the shell's). Before this pass the chrome below
+     * composed AnimatedVisibility with NO enter/exit at all —
+     * Compose's default fade+expand, on no engine spec and
+     * deaf to reduce motion. */
+    reduceMotion: Boolean = false
 ) {
     val state by viewModel.state.collectAsState()
     val prefs = viewModel.scopedPreferences
@@ -495,6 +502,8 @@ fun KomikkuReaderScreen(
         // Chrome: top bar.
         AnimatedVisibility(
             visible = chromeVisible,
+            enter = app.xreader.core.motion.sharedAxisYEnter(reduceMotion),
+            exit = app.xreader.core.motion.sharedAxisYExit(reduceMotion),
             modifier = Modifier.align(Alignment.TopCenter)
         ) {
             val currentChapterId = state.chapters
@@ -558,6 +567,8 @@ fun KomikkuReaderScreen(
         // Chrome: ExhUtils strip + horizontal navigator + bottom bar.
         AnimatedVisibility(
             visible = chromeVisible,
+            enter = app.xreader.core.motion.sharedAxisYEnter(reduceMotion),
+            exit = app.xreader.core.motion.sharedAxisYExit(reduceMotion),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
             // v1.5.35 (item 3): the whole bottom stack rides

@@ -300,6 +300,15 @@ class MainActivity : FragmentActivity() {
                         }
                     )
                     onboardingDone == false -> OnboardingScreen(
+                        // Code-129 motion pass: the pager takes
+                        // the app's motion decision — the
+                        // user's/system motion setting
+                        // (motionEnabled) folded with the
+                        // performance tier (suppressed on
+                        // Minimal-tier devices) — the same
+                        // decision the launch intro uses, minus
+                        // the intro's own on/off switch.
+                        reduceMotion = !(motionEnabled && launchMotionTier != SpringMotionEngine.MotionTier.Minimal),
                         onDone = {
                             activityScope.launch { container.onboardingPrefs.markCompleted() }
                         },
@@ -472,6 +481,28 @@ class MainActivity : FragmentActivity() {
                         //    composition. Warm starts settle at
                         //    once through the once-per-process
                         //    claim and stay instant.
+                        //
+                        // Code 129 (the no-splash conviction —
+                        // the owner's code-128 proof opened
+                        // straight into the Library): the mirror
+                        // latch below steers ONLY which face the
+                        // intro wears; whether an intro shows at
+                        // all is decided inside the intros from
+                        // the process once-gate and the motion
+                        // decision alone. In particular the
+                        // Library-ready signal no longer reaches
+                        // the show decision: code 128's intros
+                        // sampled `libraryReady` when their
+                        // begin/claim effect ran — after this
+                        // Box's first sibling (MainScaffold) had
+                        // already started its ready watcher —
+                        // and on a fast established install the
+                        // ready signal won that race, so the
+                        // intro refused and settled without
+                        // painting a frame. Readiness now only
+                        // dismisses a showing intro (held until
+                        // its enter animation completes, code
+                        // 127), bounded by each intro's cap.
                         val introMirrorDesign = remember {
                             runCatching {
                                 container.applicationContext

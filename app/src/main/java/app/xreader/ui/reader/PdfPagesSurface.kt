@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateIntOffsetAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -126,7 +125,6 @@ import app.xreader.ui.localreader.AutoScrollController
 import app.xreader.ui.localreader.AutoScrollEngine
 import app.xreader.ui.localreader.NormalizedRect
 import app.xreader.ui.localreader.PDF_BASE_SCALE
-import app.xreader.ui.localreader.PDF_DOUBLE_TAP_ANIM_MS
 import app.xreader.ui.localreader.PDF_PLACEHOLDER_SPINNER_DELAY_MS
 import app.xreader.ui.localreader.PDF_REFINE_CLIP_MARGIN
 import app.xreader.ui.localreader.PDF_ZOOM_SUPERSAMPLE
@@ -2215,8 +2213,9 @@ private fun PdfPageCell(
         zoomAnimation = null
     }
     /** v1.5.28: the Komikku double-tap glide — animate ONLY
-     * the layer transform (zoom + pan) to the target over
-     * [PDF_DOUBLE_TAP_ANIM_MS]; no bitmap work rides the
+     * the layer transform (zoom + pan) to the target on the
+     * engine's PageAssist spring (code-129 motion pass; it
+     * ran on a 250 ms tween before); no bitmap work rides the
      * motion path, and the settle refine fires once the
      * transform comes to rest (the settle effect below). */
     fun animateZoomTo(targetZoom: Float, targetPan: Offset) {
@@ -2228,7 +2227,15 @@ private fun PdfPageCell(
         zoomAnimation = cellScope.launch {
             try {
                 val progress = Animatable(0f)
-                progress.animateTo(1f, tween(PDF_DOUBLE_TAP_ANIM_MS)) {
+                progress.animateTo(
+                    1f,
+                    // Code-129 motion pass: the double-tap glide
+                    // rides the engine's PageAssist spring (the
+                    // reader page-settle profile), not a timed
+                    // tween — velocity-continuous if re-tapped
+                    // mid-glide.
+                    SpringMotionEngine.PageAssist.toSpec<Float>()
+                ) {
                     zoomState.setZoomPan(
                         startZoom + (targetZoom - startZoom) * value,
                         startPan + (targetPan - startPan) * value
@@ -3935,9 +3942,10 @@ private fun PdfContinuousBody(
         surfaceZoomAnimation?.cancel()
         surfaceZoomAnimation = null
     }
-    /** The donor's double-tap: an animated (here
-     * [PDF_DOUBLE_TAP_ANIM_MS]) run of scale + pan to the
-     * target, transform-only — no item re-renders. */
+    /** The donor's double-tap: an animated run of scale +
+     * pan to the target on the engine's PageAssist spring
+     * (code-129 motion pass), transform-only — no item
+     * re-renders. */
     fun animateSurfaceZoomTo(targetScale: Float, targetPan: Offset) {
         cancelSurfaceZoomAnimation()
         val startScale = surfaceZoom.scale
@@ -3947,7 +3955,15 @@ private fun PdfContinuousBody(
         val h = surfaceSizePx.height
         surfaceZoomAnimation = scope.launch {
             val progress = Animatable(0f)
-            progress.animateTo(1f, tween(PDF_DOUBLE_TAP_ANIM_MS)) {
+            progress.animateTo(
+                    1f,
+                    // Code-129 motion pass: the double-tap glide
+                    // rides the engine's PageAssist spring (the
+                    // reader page-settle profile), not a timed
+                    // tween — velocity-continuous if re-tapped
+                    // mid-glide.
+                    SpringMotionEngine.PageAssist.toSpec<Float>()
+                ) {
                 surfaceZoom.setScalePan(
                     startScale + (targetScale - startScale) * value,
                     startPan + (targetPan - startPan) * value,

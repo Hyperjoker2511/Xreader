@@ -256,53 +256,58 @@ fun stackPopExit(reduceMotion: Boolean): ExitTransition =
     else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) { it / 6 } +
         fadeOut(stackFadeSpec())
 
-/** SlideFade's decelerate curve (the ColorOS 17 demo's own
- * values, ruled the default 2026-11-20). */
-private val slideFadeDecelerate = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
-
-/** SlideFade's accelerate curve for the exit half. */
-private val slideFadeAccelerate = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
-
 /**
- * Tab-to-tab — SlideFade (Micro-build M; the ColorOS 17
- * demo the owner picked 2026-11-20, "Use it as default
- * transition", pulled into M at his word). This supersedes
- * the travel-choreography round's instant swap
- * (SPEC-NAV-TRAVEL-WAVE-2026-11-16 §A) as the DEFAULT tab
- * transition: the incoming tab slides in from a quarter
- * width on the travel side over 450 ms on the decelerate
- * curve, fading in over 320 ms after a 60 ms delay and
- * scaling up from 0.94; [direction] steers it (+1 travels
- * leftward toward the later tab, −1 rightward). Under
- * [reduceMotion] the pair stays the symmetric crossfade it
- * has always been — reduced motion's behaviour is
- * unchanged. Stack pushes/pops keep the shared-axis
- * geometry above — untouched.
+ * Tab-to-tab — the spring switch (Micro-build M's SlideFade
+ * GEOMETRY, retimed onto the engine by the code-129 motion
+ * pass, 2026-11-25). History: the travel-choreography round
+ * (SPEC-NAV-TRAVEL-WAVE-2026-11-16 §A) made tab roots swap
+ * instantly; Micro-build M (2026-11-21) restored a real
+ * transition — SlideFade, the ColorOS 17 demo the owner
+ * picked 2026-11-20 ("Use it as default transition") — but
+ * ran its travel and scale on timed 450/300 ms tweens,
+ * which broke this file's own founding rule (position is
+ * ALWAYS a spring; tweens are only for alpha) and left the
+ * app's most-used transition as the one surface not riding
+ * [SpringMotionEngine]. The code-129 pass keeps SlideFade's
+ * geometry and its alpha timing exactly — incoming tab
+ * travels from a quarter width on the travel side, fades
+ * in over 320 ms after a 60 ms delay, scales up from 0.94;
+ * outgoing tab leaves toward a fifth width, fades out over
+ * 200 ms, scales down to 0.96; [direction] steers it (+1
+ * travels leftward toward the later tab, −1 rightward) —
+ * but the travel and the scale now ride the Spatial spring
+ * (the Liquid Glass spring switch, the settled tab-switch
+ * default), so a tab switch is velocity-continuous and
+ * interruptible mid-flight like every other travel in the
+ * app. Under [reduceMotion] the pair stays the symmetric
+ * crossfade it has always been — reduced motion's
+ * behaviour is unchanged. Stack pushes/pops keep the
+ * shared-axis geometry above — untouched.
  */
 fun tabEnter(direction: Int = 0, reduceMotion: Boolean = false): EnterTransition =
     if (reduceMotion) fadeIn(tabCrossfadeSpec())
-    else slideInHorizontally(
-        animationSpec = tween(450, easing = slideFadeDecelerate)
-    ) { direction * (it / 4) } +
+    else slideInHorizontally(SpringMotionEngine.Spatial.toSpec()) {
+        direction * (it / 4)
+    } +
         fadeIn(tween(320, delayMillis = 60)) +
         scaleIn(
-            animationSpec = tween(450, easing = slideFadeDecelerate),
+            animationSpec = SpringMotionEngine.Spatial.toSpec(),
             initialScale = 0.94f
         )
 
-/** Tab-to-tab exit, SlideFade's second half: the outgoing
- * tab leaves toward a fifth width on the travel side over
- * 300 ms on the accelerate curve, fading out over 200 ms
- * and scaling down to 0.96. Under [reduceMotion] the exit
+/** Tab-to-tab exit, the spring switch's second half: the
+ * outgoing tab leaves toward a fifth width on the travel
+ * side on the Spatial spring, fading out over 200 ms and
+ * scaling down to 0.96. Under [reduceMotion] the exit
  * keeps the symmetric crossfade. */
 fun tabExit(direction: Int = 0, reduceMotion: Boolean = false): ExitTransition =
     if (reduceMotion) fadeOut(tabCrossfadeSpec())
-    else slideOutHorizontally(
-        animationSpec = tween(300, easing = slideFadeAccelerate)
-    ) { -direction * (it / 5) } +
+    else slideOutHorizontally(SpringMotionEngine.Spatial.toSpec()) {
+        -direction * (it / 5)
+    } +
         fadeOut(tween(200)) +
         scaleOut(
-            animationSpec = tween(300),
+            animationSpec = SpringMotionEngine.Spatial.toSpec(),
             targetScale = 0.96f
         )
 

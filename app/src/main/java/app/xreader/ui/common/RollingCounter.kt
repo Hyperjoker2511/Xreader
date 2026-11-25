@@ -1,7 +1,7 @@
 package app.xreader.ui.common
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.spring
+import app.xreader.core.motion.toSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -120,7 +120,12 @@ private fun RollingDigitCell(
             wheelTarget = next
             wheel.animateTo(
                 next,
-                spring(dampingRatio = 0.75f, stiffness = 350f)
+                // Code-129 motion pass: the wheel's settle is
+                // the engine's DigitWheel profile (stiffness
+                // 350, dampingRatio 0.75 — the numbers this
+                // call always ran, moved under the engine).
+                app.xreader.core.motion.SpringMotionEngine
+                    .DigitWheel.toSpec()
             )
             // Settled: rebase into the home band (visually the
             // same digit — the strip repeats every 10).

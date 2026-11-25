@@ -108,6 +108,28 @@ object SpringMotionEngine {
 
     val pressProfiles: List<SpringProfile> = listOf(ApplePress)
 
+    // ── Component family (code-129 motion pass, 2026-11-25) ────
+    // The SEVENTH sanctioned family, kept out of [profiles] like
+    // the others: two component-local elastic behaviours whose
+    // numbers were designed with their components (the elastic
+    // slider's rubbery press/return, the rolling digit wheel's
+    // settle) and lived as screen-local constants until the
+    // code-129 audit. The numbers are PRESERVED verbatim — the
+    // pass moves them under the engine's roof (MotionSpecs'
+    // rule: a behaviour a surface needs is added HERE, never
+    // declared locally), it does not retune them. Both
+    // deliberately overshoot (elastic feedback is their job),
+    // so like the celebration and Apple families they stay out
+    // of the subtle [profiles] contract.
+
+    /** Elastic slider press + rubber-band return: stiffness 420, dampingRatio 0.55. */
+    val ElasticPress = SpringProfile("ElasticPress", stiffness = 420f, dampingRatio = 0.55f)
+
+    /** Rolling digit wheel settle: stiffness 350, dampingRatio 0.75. */
+    val DigitWheel = SpringProfile("DigitWheel", stiffness = 350f, dampingRatio = 0.75f)
+
+    val componentProfiles: List<SpringProfile> = listOf(ElasticPress, DigitWheel)
+
     // ── Nav stack family (v1.0.4, D8 — user-supplied; geometry
     // retuned by Patch 8) ──────────
     // The GEOMETRY is the user's design and stays: pushed screens
