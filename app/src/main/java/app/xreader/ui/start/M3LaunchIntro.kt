@@ -66,6 +66,15 @@ fun M3LaunchIntro(
     var entered by remember { mutableStateOf(false) }
     var enterFinished by remember { mutableStateOf(false) }
     val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
+    // The spec's own length is the enter fade's length. The
+    // built-in motion schemes spend a TweenSpec for effects,
+    // whose durationMillis is readable; any other spec shape
+    // leaves the latch unset and dismissal falls to the cap
+    // below (the pre-127 behaviour) rather than guessing a
+    // number.
+    val enterMillis =
+        (effects as? androidx.compose.animation.core.TweenSpec<Float>)
+            ?.durationMillis
     LaunchedEffect(libraryReady) {
         if (libraryReady && enterFinished) dismissed = true
     }
@@ -74,9 +83,11 @@ fun M3LaunchIntro(
         // The enter fade's own length: when it has played
         // out, a ready Library dismisses the intro at once;
         // until then the moment holds (code 127).
-        delay(effects.durationMillis.toLong())
-        enterFinished = true
-        if (libraryReady) dismissed = true
+        if (enterMillis != null) {
+            delay(enterMillis.toLong())
+            enterFinished = true
+            if (libraryReady) dismissed = true
+        }
     }
     // The hard cap, unchanged: 1,200 ms from the first frame,
     // whatever the ready signal does.
