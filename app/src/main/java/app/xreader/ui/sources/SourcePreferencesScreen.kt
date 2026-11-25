@@ -171,38 +171,72 @@ fun SourcePreferencesScreen(
             onDismissRequest = { choiceRow = null },
             title = { Text(row.title) },
             text = {
-                Column {
+                // Code 127 (audit C6): the choice editor wears
+                // the face, like the rows that open it — M3
+                // radio rows in the Material 3 face; glass
+                // kit rows in Nocturne. (The text editor below
+                // holds no face-specific control — stock field
+                // + actions are both faces' editor dress.)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     row.options.forEachIndexed { index, label ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    viewModel.setChoice(
-                                        row,
-                                        row.optionValues
-                                            .getOrNull(index) ?: label
-                                    )
-                                    choiceRow = null
-                                }
-                                .padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                label,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (index == row.selectedIndex) {
-                                    MaterialTheme.colorScheme.primary
-                                } else {
-                                    MaterialTheme.colorScheme.onSurface
-                                },
-                                modifier = Modifier.weight(1f)
+                        val pick: () -> Unit = {
+                            viewModel.setChoice(
+                                row,
+                                row.optionValues
+                                    .getOrNull(index) ?: label
                             )
-                            if (index == row.selectedIndex) {
-                                Text(
-                                    "Chosen",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
+                            choiceRow = null
+                        }
+                        if (m3) {
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .clickable(onClick = pick)
+                                    .padding(vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(10.dp)
+                            ) {
+                                androidx.compose.material3.RadioButton(
+                                    selected = index == row.selectedIndex,
+                                    onClick = pick
                                 )
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                            }
+                        } else {
+                            app.xreader.ui.common.GlassCard(
+                                modifier = Modifier.fillMaxWidth(),
+                                onClick = pick,
+                                contentPadding =
+                                    androidx.compose.foundation.layout
+                                        .PaddingValues(
+                                            horizontal = 16.dp,
+                                            vertical = 12.dp
+                                        )
+                            ) {
+                                Row(
+                                    verticalAlignment =
+                                        Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        label,
+                                        style = MaterialTheme
+                                            .typography.titleSmall,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (index == row.selectedIndex) {
+                                        Text(
+                                            "Chosen",
+                                            style = MaterialTheme
+                                                .typography.labelMedium,
+                                            color = MaterialTheme
+                                                .colorScheme.primary
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -268,10 +302,30 @@ fun SourcePreferencesScreen(
                                 .padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            // Code 127 (audit C6): in
+                            // Nocturne the checkbox takes the
+                            // kit's accent colours (the reader
+                            // chrome's checkbox pattern); the
+                            // stock checkbox is the Material 3
+                            // face's own dress and stays there.
                             Checkbox(
                                 checked = chosen,
                                 onCheckedChange = {
                                     viewModel.toggleMultiValue(row, value)
+                                },
+                                colors = if (m3) {
+                                    androidx.compose.material3
+                                        .CheckboxDefaults.colors()
+                                } else {
+                                    androidx.compose.material3
+                                        .CheckboxDefaults.colors(
+                                            checkedColor =
+                                                MaterialTheme.colorScheme
+                                                    .primary,
+                                            uncheckedColor =
+                                                MaterialTheme.colorScheme
+                                                    .onSurfaceVariant
+                                        )
                                 }
                             )
                             Text(

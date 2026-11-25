@@ -45,6 +45,13 @@ import kotlinx.coroutines.delay
  * and dark alike; Nocturne keeps its own spring + artwork).
  * Dismissal is unchanged: the Library-ready signal rules, the
  * cap is only a cap — never a timer to wait out.
+ *
+ * Code 127 (owner's splash-timing pick): the ready signal
+ * dismisses the intro only once the enter fade has completed
+ * — the same hold Nocturne's intro applies — so a fast load
+ * can no longer cut the moment mid-fade. The hold lasts
+ * exactly the fade (still under a second); the 1,200 ms cap
+ * still bounds the whole show.
  */
 @Composable
 fun M3LaunchIntro(
@@ -57,15 +64,26 @@ fun M3LaunchIntro(
     // animates IN (an already-visible AnimatedVisibility never
     // runs its enter transition — code-126 re-check caveat).
     var entered by remember { mutableStateOf(false) }
+    var enterFinished by remember { mutableStateOf(false) }
+    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     LaunchedEffect(libraryReady) {
-        if (libraryReady) dismissed = true
+        if (libraryReady && enterFinished) dismissed = true
     }
     LaunchedEffect(Unit) {
         entered = true
+        // The enter fade's own length: when it has played
+        // out, a ready Library dismisses the intro at once;
+        // until then the moment holds (code 127).
+        delay(effects.durationMillis.toLong())
+        enterFinished = true
+        if (libraryReady) dismissed = true
+    }
+    // The hard cap, unchanged: 1,200 ms from the first frame,
+    // whatever the ready signal does.
+    LaunchedEffect(Unit) {
         delay(1_200)
         dismissed = true
     }
-    val effects = MaterialTheme.motionScheme.defaultEffectsSpec<Float>()
     AnimatedVisibility(
         visible = animationsEnabled && entered && !dismissed,
         enter = fadeIn(effects),

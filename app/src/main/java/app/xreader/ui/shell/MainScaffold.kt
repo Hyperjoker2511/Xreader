@@ -1070,11 +1070,18 @@ private fun PhoneShell(
             // top edge via the same clearance, so it can never
             // slide under the bar the way the Scaffold's host
             // sat behind the old slot.
+            // Code 127 (audit D1): the toast itself is the
+            // settled capsule (DesignSnackbar) in this
+            // Nocturne shell, not the rectangular stock
+            // Snackbar.
             SnackbarHost(
                 snackbar,
                 Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(bottom = clearance)
+                    .padding(bottom = clearance),
+                snackbar = { data ->
+                    app.xreader.ui.common.DesignSnackbar(data)
+                }
             )
             // The dock overlay: composed after the grain so the
             // bar floats over everything. The wrapper wraps only
@@ -1136,7 +1143,18 @@ private fun RailShell(
     appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
     packViewModel: app.xreader.ui.sources.ProviderPackViewModel
 ) {
-    Scaffold(snackbarHost = { SnackbarHost(snackbar) }) { padding ->
+    Scaffold(
+        snackbarHost = {
+            // Code 127 (audit D1): the capsule toast, as in
+            // the phone shell.
+            SnackbarHost(
+                snackbar,
+                snackbar = { data ->
+                    app.xreader.ui.common.DesignSnackbar(data)
+                }
+            )
+        }
+    ) { padding ->
         // v1.0.4 (D1): same backdrop stage as the phone shell.
         // v1.0.7: same bloom / background / grain treatment.
         val backdropFile = appearance.backgroundImage?.let { name ->
@@ -2036,6 +2054,14 @@ internal fun XreaderNavHost(
                 app.xreader.ui.more.HistoryViewModel>(
                 factory = app.xreader.ui.more.HistoryViewModel.factory(container)
             )
+            // Code 127 (audit D3): History's delete-outcome
+            // messages ride the shell snackbar channel (the
+            // capsule toast in Nocturne, stock in the Material
+            // 3 face) like the Library's — the screen's own
+            // platform-Toast collector is gone.
+            androidx.compose.runtime.LaunchedEffect(viewModel) {
+                viewModel.messages.collect { msg -> onPhaseNote(msg) }
+            }
             app.xreader.ui.more.HistoryScreen(
                 viewModel = viewModel,
                 coverFile = coverFile,

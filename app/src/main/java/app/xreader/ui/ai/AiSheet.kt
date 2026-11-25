@@ -42,6 +42,38 @@ import app.xreader.ui.common.StatusPill
 import app.xreader.ui.common.XreaderPrimaryButton
 
 /**
+ * Code 127 (audit F4): the Ask AI content's card, wearing the
+ * active face — an M3 Card (surfaceContainerLow, medium
+ * shape) in the Material 3 design, the GlassCard only in
+ * Nocturne. This content is shared by both faces' Ask AI
+ * pages; the GlassCard used to render inside the M3 page
+ * too. The dual-form pattern is ProviderPackUi's.
+ */
+@Composable
+private fun AiCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    if (app.xreader.ui.theme.isM3FamilyDesign()) {
+        androidx.compose.material3.Card(
+            colors = androidx.compose.material3.CardDefaults
+                .cardColors(
+                    containerColor =
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+            shape = MaterialTheme.shapes.medium,
+            modifier = modifier
+        ) {
+            androidx.compose.foundation.layout.Column(
+                Modifier.padding(16.dp)
+            ) { content() }
+        }
+    } else {
+        GlassCard(modifier = modifier) { content() }
+    }
+}
+
+/**
  * The reader's "Ask AI" sheet (Stitch ai-sheet design): violet
  * Gemini accent, one-tap rows for summarize / catch-up / translate /
  * illustrate, and lore chat with the spoiler guard — everything
@@ -100,7 +132,7 @@ fun AiSheetContent(
         }
 
         if (!state.hasKey) {
-            GlassCard(Modifier.fillMaxWidth()) {
+            AiCard(Modifier.fillMaxWidth()) {
                 Text(
                     "AI features need an AI provider",
                     style = MaterialTheme.typography.titleSmall
@@ -252,7 +284,7 @@ fun AiSheetContent(
                         Arrangement.Start
                     }
                 ) {
-                    GlassCard(
+                    AiCard(
                         modifier = Modifier.fillMaxWidth(
                             if (message.fromUser) 0.85f else 0.95f
                         )

@@ -435,8 +435,10 @@ class MainActivity : FragmentActivity() {
                         // composed as a sibling, never instead of
                         // or before the shell, so first content is
                         // never gated on it; it dismisses on the
-                        // Library-ready signal above and is hard-
-                        // capped at 1,000 ms by its controller.
+                        // Library-ready signal above (held until
+                        // its enter animation completes — code
+                        // 127) and is hard-capped at 1,000 ms by
+                        // its controller.
                         if (designState.design !=
                             app.xreader.data.prefs.AppDesign.NOCTURNE
                         ) {

@@ -651,7 +651,13 @@ fun highlightSpansFor(
 // the shipped SelectionActionRow and SelectionHighlightMenu
 // were deleted with this build — every host seats the one bar.
 
-/** The note editor: a highlight with words attached. */
+/** The note editor: a highlight with words attached.
+ *
+ * Code 127 (audit C13) note: the ONE note editor for every
+ * reader surface (EPUB here, both PDF surfaces call it too)
+ * — stock field + TextButton actions under the active
+ * theme root is both faces' dressed editor anatomy; it
+ * holds no face-specific control to branch. */
 @Composable
 internal fun SelectionNoteEditor(
     selectedText: String,

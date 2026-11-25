@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.Brush
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DesignServices
 import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.Download
@@ -55,7 +56,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -1496,24 +1496,28 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
             )
             // v1.0.5 (B3): chip rows are FlowRows — wrapping
             // rows can never crush a label on a narrow screen.
+            // Code 127 (audit F5): the kit's segmented
+            // control (NocturneChips) — the stock FilterChips
+            // were the M3 form's dress leaking into the
+            // Nocturne page (the M3 page keeps its own form).
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
+                    label = "Small",
                     selected = appearance.appSize == AppearanceValidation.APP_SIZE_SMALL,
-                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_SMALL) },
-                    label = { Text("Small") }
+                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_SMALL) }
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
+                    label = "Normal",
                     selected = appearance.appSize == AppearanceValidation.APP_SIZE_NORMAL,
-                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_NORMAL) },
-                    label = { Text("Normal") }
+                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_NORMAL) }
                 )
-                FilterChip(
+                app.xreader.ui.common.NocturneChip(
+                    label = "Large",
                     selected = appearance.appSize == AppearanceValidation.APP_SIZE_LARGE,
-                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_LARGE) },
-                    label = { Text("Large") }
+                    onClick = { viewModel.setAppSize(AppearanceValidation.APP_SIZE_LARGE) }
                 )
             }
             Column {
@@ -1624,42 +1628,72 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     }
                 }
             }
-            GlassStyle.entries.forEach { style ->
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .selectable(
-                            selected = appearance.glassStyle == style,
-                            role = Role.RadioButton,
-                            onClick = { viewModel.setGlassStyle(style) }
-                        )
-                        .padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    RadioButton(
-                        selected = appearance.glassStyle == style,
-                        onClick = { viewModel.setGlassStyle(style) }
-                    )
-                    Column {
-                        Text(
-                            when (style) {
-                                GlassStyle.LIQUID -> "Liquid glass"
-                                GlassStyle.FROSTED -> "Frosted glass"
-                                GlassStyle.TINTED -> "Tinted glass"
-                                GlassStyle.SOLID -> "Solid"
-                            },
-                            style = MaterialTheme.typography.bodyLarge
-                        )
-                        Text(
-                            when (style) {
-                                GlassStyle.LIQUID -> "Liquid glass — surfaces bend the light behind them. Needs a strong device."
-                                GlassStyle.FROSTED -> "Bars and cards blur whatever scrolls behind them."
-                                GlassStyle.TINTED -> "Translucent tinted surfaces, no blur. Kind to weaker devices."
-                                GlassStyle.SOLID -> "Fully opaque surfaces. Nothing shows through."
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+            // Code 127 (audit F5): selectable Tiles (the
+            // settings design's picked-tile language —
+            // accent-soft fill, 2 dp accent border, check
+            // badge) instead of stock RadioButton rows,
+            // which read alike picked and unpicked.
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                GlassStyle.entries.forEach { style ->
+                    val picked = appearance.glassStyle == style
+                    androidx.compose.material3.Surface(
+                        onClick = { viewModel.setGlassStyle(style) },
+                        shape = androidx.compose.foundation.shape
+                            .RoundedCornerShape(16.dp),
+                        color = if (picked) {
+                            MaterialTheme.colorScheme.primary
+                                .copy(alpha = 0.14f)
+                        } else {
+                            MaterialTheme.colorScheme
+                                .surfaceContainerHigh
+                        },
+                        border = if (picked) {
+                            androidx.compose.foundation.BorderStroke(
+                                2.dp,
+                                MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            Modifier.padding(
+                                horizontal = 14.dp, vertical = 10.dp
+                            ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(10.dp)
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(
+                                    when (style) {
+                                        GlassStyle.LIQUID -> "Liquid glass"
+                                        GlassStyle.FROSTED -> "Frosted glass"
+                                        GlassStyle.TINTED -> "Tinted glass"
+                                        GlassStyle.SOLID -> "Solid"
+                                    },
+                                    style = MaterialTheme.typography.bodyLarge
+                                )
+                                Text(
+                                    when (style) {
+                                        GlassStyle.LIQUID -> "Liquid glass — surfaces bend the light behind them. Needs a strong device."
+                                        GlassStyle.FROSTED -> "Bars and cards blur whatever scrolls behind them."
+                                        GlassStyle.TINTED -> "Translucent tinted surfaces, no blur. Kind to weaker devices."
+                                        GlassStyle.SOLID -> "Fully opaque surfaces. Nothing shows through."
+                                    },
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (picked) {
+                                Icon(
+                                    Icons.Filled.Check,
+                                    contentDescription = "Chosen",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -3728,6 +3762,19 @@ private fun CustomiseSlider(
             "$label — ${(value * 100).roundToInt()}%",
             style = MaterialTheme.typography.bodyMedium
         )
-        Slider(value = value, onValueChange = onChange, valueRange = range)
+        // Code 127 (audit F5): the kit's slider styling —
+        // accent thumb and active track (the stock slider
+        // was the M3 form's dress on the Nocturne page).
+        Slider(
+            value = value,
+            onValueChange = onChange,
+            valueRange = range,
+            colors = androidx.compose.material3.SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary,
+                inactiveTrackColor = MaterialTheme.colorScheme
+                    .surfaceContainerHighest
+            )
+        )
     }
 }

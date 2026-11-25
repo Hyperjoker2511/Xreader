@@ -897,6 +897,17 @@ private fun ArtTab(
     }
 }
 
+/**
+ * Code 127 (audit C5) note: this editor is shared by both
+ * Lore hosts on purpose — its anatomy (stock fields +
+ * TextButton actions under the active theme root) is
+ * byte-identical to BOTH faces' dressed Add editors above
+ * and in M3LoreContent; the one face-specific control in
+ * those editors (the type-choice chip row) has no
+ * counterpart here, since an entity's type is not edited.
+ * The face-specific control this file did leak — the
+ * TermEditor's switch — branches now (audit C4).
+ */
 @Composable
 private fun EntityEditor(
     entity: LoreEntity,
@@ -976,11 +987,24 @@ private fun TermEditor(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Locked (an order, not a hint)")
-                    NocturneSwitch(
-                        checked = locked,
-                        onCheckedChange = { locked = it },
-                        enabled = true
-                    )
+                    // Code 127 (audit C4): the switch wears
+                    // the face — stock M3 Switch in the
+                    // Material 3 face (this editor is shared
+                    // by both Lore hosts; the NocturneSwitch
+                    // used to leak into the M3 page),
+                    // NocturneSwitch in Nocturne.
+                    if (app.xreader.ui.theme.isEditorialDesign()) {
+                        androidx.compose.material3.Switch(
+                            checked = locked,
+                            onCheckedChange = { locked = it }
+                        )
+                    } else {
+                        NocturneSwitch(
+                            checked = locked,
+                            onCheckedChange = { locked = it },
+                            enabled = true
+                        )
+                    }
                 }
             }
         },

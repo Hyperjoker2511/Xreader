@@ -18,6 +18,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
 import app.xreader.domain.reader.ReplaceTarget
 import app.xreader.domain.reader.TermPair
@@ -101,6 +102,11 @@ fun ReplaceTermDialog(
     var draftWholeWord by remember(target) {
         mutableStateOf(initial.wholeWord)
     }
+    // Code 127 (audit C8): this dialog opens over both faces'
+    // readers; its controls wear the active face — the kit
+    // switch + chip row in Nocturne, the stock M3 controls in
+    // the Material 3 face (previously stock everywhere).
+    val nocturne = !app.xreader.ui.theme.isEditorialDesign()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -129,10 +135,17 @@ fun ReplaceTermDialog(
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f)
                     )
-                    Switch(
-                        checked = draftMatchCase,
-                        onCheckedChange = { draftMatchCase = it }
-                    )
+                    if (nocturne) {
+                        app.xreader.ui.common.NocturneSwitch(
+                            checked = draftMatchCase,
+                            onCheckedChange = { draftMatchCase = it }
+                        )
+                    } else {
+                        Switch(
+                            checked = draftMatchCase,
+                            onCheckedChange = { draftMatchCase = it }
+                        )
+                    }
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -140,34 +153,74 @@ fun ReplaceTermDialog(
                         style = MaterialTheme.typography.bodyMedium,
                         modifier = Modifier.weight(1f)
                     )
-                    Switch(
-                        checked = draftWholeWord,
-                        onCheckedChange = { draftWholeWord = it }
-                    )
+                    if (nocturne) {
+                        app.xreader.ui.common.NocturneSwitch(
+                            checked = draftWholeWord,
+                            onCheckedChange = { draftWholeWord = it }
+                        )
+                    } else {
+                        Switch(
+                            checked = draftWholeWord,
+                            onCheckedChange = { draftWholeWord = it }
+                        )
+                    }
                 }
                 if (scopeRowVisible) {
-                    androidx.compose.material3
-                        .SingleChoiceSegmentedButtonRow(
-                            modifier = Modifier.fillMaxWidth()
+                    if (nocturne) {
+                        // The kit's chip row stands in for the
+                        // segmented row in Nocturne; the
+                        // All-books chip is inert (dimmed,
+                        // no click door) for an Existing pair,
+                        // exactly the segmented row's disabled
+                        // segment.
+                        Row(
+                            horizontalArrangement =
+                                Arrangement.spacedBy(8.dp)
                         ) {
-                            SegmentedButton(
+                            app.xreader.ui.common.NocturneChip(
+                                label = "This book",
                                 selected = !scopeAllBooks,
-                                onClick = { scopeAllBooks = false },
-                                shape = androidx.compose.material3
-                                    .SegmentedButtonDefaults.itemShape(
-                                        index = 0, count = 2
-                                    )
-                            ) { Text("This book") }
-                            SegmentedButton(
+                                onClick = { scopeAllBooks = false }
+                            )
+                            app.xreader.ui.common.NocturneChip(
+                                label = "All books",
                                 selected = scopeAllBooks,
-                                onClick = { scopeAllBooks = true },
-                                enabled = existing == null,
-                                shape = androidx.compose.material3
-                                    .SegmentedButtonDefaults.itemShape(
-                                        index = 1, count = 2
-                                    )
-                            ) { Text("All books") }
+                                modifier = if (existing != null) {
+                                    Modifier.alpha(0.38f)
+                                } else {
+                                    Modifier
+                                },
+                                onClick = if (existing != null) {
+                                    null
+                                } else {
+                                    { scopeAllBooks = true }
+                                }
+                            )
                         }
+                    } else {
+                        androidx.compose.material3
+                            .SingleChoiceSegmentedButtonRow(
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                SegmentedButton(
+                                    selected = !scopeAllBooks,
+                                    onClick = { scopeAllBooks = false },
+                                    shape = androidx.compose.material3
+                                        .SegmentedButtonDefaults.itemShape(
+                                            index = 0, count = 2
+                                        )
+                                ) { Text("This book") }
+                                SegmentedButton(
+                                    selected = scopeAllBooks,
+                                    onClick = { scopeAllBooks = true },
+                                    enabled = existing == null,
+                                    shape = androidx.compose.material3
+                                        .SegmentedButtonDefaults.itemShape(
+                                            index = 1, count = 2
+                                        )
+                                ) { Text("All books") }
+                            }
+                    }
                 }
                 Text(
                     if (scopeRowVisible && scopeAllBooks) {

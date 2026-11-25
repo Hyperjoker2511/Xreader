@@ -153,6 +153,18 @@ class OpdsViewModel(private val container: AppContainer) : ViewModel() {
         return true
     }
 
+    /** Code 127 (audit D2): the catalogue error state's
+     * Retry door — reloads the feed at the top of the browse
+     * stack (the Nocturne error state used to offer no door
+     * at all). */
+    fun retry() {
+        val url = _browse.value.stack.lastOrNull() ?: return
+        _browse.value = _browse.value.copy(
+            loading = true, errorMessage = null
+        )
+        loadFeed(url)
+    }
+
     /** Queues the book's best acquisition: placeholder row + FILE job;
      * the downloaded file imports on completion (AppContainer hook). */
     fun downloadBook(entry: OpdsEntry) {

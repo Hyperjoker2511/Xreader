@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import app.xreader.data.prefs.AppearanceState
 import app.xreader.data.prefs.AppearanceValidation
 import app.xreader.data.prefs.GlassStyle
 import app.xreader.data.prefs.ThemeMode
@@ -70,6 +71,20 @@ fun AppearanceScreen(
     onOpenCustomise: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Code 127 (audit F1): this screen finally has a face —
+    // every sibling settings screen early-returns an M3 form;
+    // this one rendered Nocturne glass + stock controls in
+    // both designs, with pre-face copy ("ember ink").
+    if (app.xreader.ui.theme.isEditorialDesign()) {
+        M3AppearanceContent(
+            state = state,
+            onBack = onBack,
+            onOpenCustomise = onOpenCustomise,
+            onThemeMode = viewModel::setThemeMode,
+            onReduceMotion = viewModel::setReduceMotion
+        )
+        return
+    }
     Column(
         Modifier
             .fillMaxSize()
@@ -86,32 +101,53 @@ fun AppearanceScreen(
         }
 
         GlassCard(Modifier.fillMaxWidth()) {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Theme", style = MaterialTheme.typography.titleMedium)
+                // Code 127 (audit F1): the owner's selectable
+                // Tiles — the picked mode takes the accent-soft
+                // fill, the 2 dp accent border and a check —
+                // not stock RadioButtons.
                 ThemeMode.entries.forEach { mode ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = state.themeMode == mode,
-                                role = Role.RadioButton,
-                                onClick = { viewModel.setThemeMode(mode) }
+                    val picked = state.themeMode == mode
+                    androidx.compose.material3.Surface(
+                        onClick = { viewModel.setThemeMode(mode) },
+                        shape = RoundedCornerShape(16.dp),
+                        color = if (picked) {
+                            MaterialTheme.colorScheme.primary
+                                .copy(alpha = 0.12f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        },
+                        border = if (picked) {
+                            androidx.compose.foundation.BorderStroke(
+                                2.dp, MaterialTheme.colorScheme.primary
                             )
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        } else {
+                            null
+                        },
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        RadioButton(
-                            selected = state.themeMode == mode,
-                            onClick = { viewModel.setThemeMode(mode) }
-                        )
-                        Text(
-                            when (mode) {
-                                ThemeMode.FOLLOW_SYSTEM -> "Follow system"
-                                ThemeMode.LIGHT -> "Light — warm paper"
-                                ThemeMode.DARK -> "Dark — ember ink"
-                            },
-                            style = MaterialTheme.typography.bodyLarge
-                        )
+                        Row(
+                            Modifier.padding(
+                                horizontal = 16.dp, vertical = 12.dp
+                            ),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                themeModeLabel(mode),
+                                style = MaterialTheme.typography.bodyLarge,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (picked) {
+                                Icon(
+                                    androidx.compose.material.icons.Icons
+                                        .Filled.Check,
+                                    contentDescription = "Picked",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -150,9 +186,149 @@ fun AppearanceScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Switch(
+                app.xreader.ui.common.NocturneSwitch(
                     checked = state.reduceMotion,
                     onCheckedChange = viewModel::setReduceMotion
+                )
+            }
+        }
+    }
+}
+
+/** Code 127 (audit F1): the mode labels, current-design
+ * wording — the pre-face nicknames ("warm paper", "ember
+ * ink") are gone. */
+private fun themeModeLabel(mode: ThemeMode): String = when (mode) {
+    ThemeMode.FOLLOW_SYSTEM -> "Follow system"
+    ThemeMode.LIGHT -> "Light"
+    ThemeMode.DARK -> "Dark"
+}
+
+/**
+ * Code 127 (audit F1): the Material 3 form of Appearance —
+ * the same state and doors in the face's own dress (M3
+ * cards, radio rows, stock Switch), the early-return shape
+ * every sibling settings screen already had (M3TermsContent
+ * is the model). Nocturne never reaches this composable.
+ */
+@Composable
+private fun M3AppearanceContent(
+    state: AppearanceState,
+    onBack: () -> Unit,
+    onOpenCustomise: () -> Unit,
+    onThemeMode: (ThemeMode) -> Unit,
+    onReduceMotion: (Boolean) -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(horizontal = 24.dp, vertical = 16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onBack) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+            }
+            Text("Appearance", style = MaterialTheme.typography.headlineSmall)
+        }
+
+        androidx.compose.material3.Card(
+            colors = androidx.compose.material3.CardDefaults
+                .cardColors(
+                    containerColor =
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text("Theme", style = MaterialTheme.typography.titleMedium)
+                ThemeMode.entries.forEach { mode ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = state.themeMode == mode,
+                                role = Role.RadioButton,
+                                onClick = { onThemeMode(mode) }
+                            )
+                            .padding(vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = state.themeMode == mode,
+                            onClick = { onThemeMode(mode) }
+                        )
+                        Text(
+                            themeModeLabel(mode),
+                            style = MaterialTheme.typography.bodyLarge
+                        )
+                    }
+                }
+            }
+        }
+
+        androidx.compose.material3.Card(
+            onClick = onOpenCustomise,
+            colors = androidx.compose.material3.CardDefaults
+                .cardColors(
+                    containerColor =
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text("Colours, glass & layout", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Colour themes, frosted glass, library layout, navigation and " +
+                        "reader looks all live in Customise — one home for how the app looks.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    "Open Customise",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        androidx.compose.material3.Card(
+            colors = androidx.compose.material3.CardDefaults
+                .cardColors(
+                    containerColor =
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Reduce motion", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Springs settle instantly instead of travelling.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = state.reduceMotion,
+                    onCheckedChange = onReduceMotion
                 )
             }
         }

@@ -121,6 +121,7 @@ import app.xreader.core.motion.itemExit
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.core.motion.pressBounce
 import app.xreader.ui.common.DialogDangerOption
+import app.xreader.ui.common.DialogOptionRow
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.GlassSheetActionRow
 import app.xreader.ui.common.KitEmptyState
@@ -1266,12 +1267,16 @@ fun LibraryScreen(
         }
 
         // Shelf picker (single book or a whole selection).
+        // Code 127 (audit C2): the choices wear the face's
+        // list-dialog rows (DialogOptionRow) — glass rows in
+        // Nocturne, M3 list rows in the Material 3 face —
+        // not bare TextButtons in a column.
         shelfPickerFor?.let { bookIds ->
             AlertDialog(
                 onDismissRequest = { shelfPickerFor = null },
                 title = { Text("Add to shelf") },
                 text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         val manual = state.userShelves.filter {
                             it.kind == app.xreader.data.db.ShelfKind.MANUAL
                         }
@@ -1282,15 +1287,21 @@ fun LibraryScreen(
                             )
                         }
                         manual.forEach { shelf ->
-                            TextButton(onClick = {
-                                viewModel.addBooksToShelf(bookIds, shelf.id)
-                                shelfPickerFor = null
-                            }) { Text(shelf.name) }
+                            DialogOptionRow(
+                                label = shelf.name,
+                                onClick = {
+                                    viewModel.addBooksToShelf(bookIds, shelf.id)
+                                    shelfPickerFor = null
+                                }
+                            )
                         }
-                        TextButton(onClick = {
-                            shelfPickerFor = null
-                            manageShelvesOpen = true
-                        }) { Text("New shelf…") }
+                        DialogOptionRow(
+                            label = "New shelf…",
+                            onClick = {
+                                shelfPickerFor = null
+                                manageShelvesOpen = true
+                            }
+                        )
                     }
                 },
                 confirmButton = {},
@@ -2216,7 +2227,6 @@ private fun ManageShelvesDialog(
     var newName by remember { mutableStateOf("") }
     var newRule by remember { mutableStateOf<app.xreader.data.db.SmartRule?>(null) }
     var newRuleValue by remember { mutableStateOf("") }
-    var ruleMenuOpen by remember { mutableStateOf(false) }
     var renamingId by remember { mutableStateOf<Long?>(null) }
     var renameText by remember { mutableStateOf("") }
     var deleteTarget by remember { mutableStateOf<app.xreader.data.db.Shelf?>(null) }
@@ -2239,65 +2249,48 @@ private fun ManageShelvesDialog(
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
-                Box {
-                    TextButton(onClick = { ruleMenuOpen = true }) {
-                        Text(
-                            "Fills itself: " + when (newRule) {
-                                null -> "No — I add books myself"
-                                app.xreader.data.db.SmartRule.TAG -> "By tag"
-                                app.xreader.data.db.SmartRule.UPDATED_THIS_WEEK ->
-                                    "Updated this week"
-                                app.xreader.data.db.SmartRule.UNREAD_DOWNLOADS ->
-                                    "Unread downloads"
-                                app.xreader.data.db.SmartRule.DOWNLOADED -> "Downloaded"
-                                app.xreader.data.db.SmartRule.READING_STATUS ->
-                                    "By reading status"
-                            }
-                        )
-                    }
-                    DropdownMenu(
-                        expanded = ruleMenuOpen,
-                        onDismissRequest = { ruleMenuOpen = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("No — I add books myself") },
-                            onClick = { newRule = null; ruleMenuOpen = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("By tag") },
-                            onClick = {
-                                newRule = app.xreader.data.db.SmartRule.TAG
-                                ruleMenuOpen = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Updated this week") },
-                            onClick = {
-                                newRule = app.xreader.data.db.SmartRule.UPDATED_THIS_WEEK
-                                ruleMenuOpen = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Unread downloads") },
-                            onClick = {
-                                newRule = app.xreader.data.db.SmartRule.UNREAD_DOWNLOADS
-                                ruleMenuOpen = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("Downloaded") },
-                            onClick = {
-                                newRule = app.xreader.data.db.SmartRule.DOWNLOADED
-                                ruleMenuOpen = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("By reading status") },
-                            onClick = {
-                                newRule = app.xreader.data.db.SmartRule.READING_STATUS
-                                ruleMenuOpen = false
-                            }
-                        )
+                // Code 127 (audit C1): the "Fills itself"
+                // picker is the face's single-choice language
+                // inline — FilterChips in the Material 3 face,
+                // NocturneChips in Nocturne — not a bare
+                // TextButton anchor opening a stock menu.
+                Text(
+                    "Fills itself:",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val ruleOptions: List<Pair<app.xreader.data.db.SmartRule?, String>> =
+                    listOf(
+                        null to "No — I add books myself",
+                        app.xreader.data.db.SmartRule.TAG to "By tag",
+                        app.xreader.data.db.SmartRule.UPDATED_THIS_WEEK to
+                            "Updated this week",
+                        app.xreader.data.db.SmartRule.UNREAD_DOWNLOADS to
+                            "Unread downloads",
+                        app.xreader.data.db.SmartRule.DOWNLOADED to "Downloaded",
+                        app.xreader.data.db.SmartRule.READING_STATUS to
+                            "By reading status"
+                    )
+                androidx.compose.foundation.layout.FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (app.xreader.ui.theme.isEditorialDesign()) {
+                        ruleOptions.forEach { (rule, label) ->
+                            androidx.compose.material3.FilterChip(
+                                selected = newRule == rule,
+                                onClick = { newRule = rule },
+                                label = { Text(label) }
+                            )
+                        }
+                    } else {
+                        ruleOptions.forEach { (rule, label) ->
+                            NocturneChip(
+                                label = label,
+                                selected = newRule == rule,
+                                onClick = { newRule = rule }
+                            )
+                        }
                     }
                 }
                 if (newRule == app.xreader.data.db.SmartRule.TAG) {
@@ -2318,31 +2311,44 @@ private fun ManageShelvesDialog(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
-                PrimaryPill(
-                    text = "Add shelf",
-                    onClick = {
-                        if (newName.isNotBlank()) {
-                            val value = when (newRule) {
-                                app.xreader.data.db.SmartRule.TAG ->
-                                    app.xreader.data.library.TagRegistry
-                                        .slugFor(newRuleValue)
-                                app.xreader.data.db.SmartRule.READING_STATUS ->
-                                    newRuleValue.trim().uppercase()
-                                else -> null
-                            }
-                            onCreate(newName, newRule, value)
-                            newName = ""
-                            newRule = null
-                            newRuleValue = ""
+                // Code 127 (audit C1): the Add door wears the
+                // face — stock filled Button in the Material 3
+                // face; the Nocturne PrimaryPill in Nocturne
+                // (a NocturneKit pill inside the Editorial
+                // face was part of the hit).
+                val addShelf: () -> Unit = {
+                    if (newName.isNotBlank()) {
+                        val value = when (newRule) {
+                            app.xreader.data.db.SmartRule.TAG ->
+                                app.xreader.data.library.TagRegistry
+                                    .slugFor(newRuleValue)
+                            app.xreader.data.db.SmartRule.READING_STATUS ->
+                                newRuleValue.trim().uppercase()
+                            else -> null
                         }
-                    },
-                    modifier = Modifier,
-                    // v1.5.1 (UI audit F7): enabled only with a name —
-                    // before, enabled=true was hardcoded and a tap on a
-                    // blank name silently no-oped while the pill
-                    // rendered full-strength violet.
-                    enabled = newName.isNotBlank()
-                )
+                        onCreate(newName, newRule, value)
+                        newName = ""
+                        newRule = null
+                        newRuleValue = ""
+                    }
+                }
+                if (app.xreader.ui.theme.isEditorialDesign()) {
+                    androidx.compose.material3.Button(
+                        onClick = addShelf,
+                        // v1.5.1 (UI audit F7): enabled only with
+                        // a name — before, enabled=true was
+                        // hardcoded and a tap on a blank name
+                        // silently no-oped.
+                        enabled = newName.isNotBlank()
+                    ) { Text("Add shelf") }
+                } else {
+                    PrimaryPill(
+                        text = "Add shelf",
+                        onClick = addShelf,
+                        modifier = Modifier,
+                        enabled = newName.isNotBlank()
+                    )
+                }
 
                 Text("Built-in shelves", style = MaterialTheme.typography.titleSmall)
                 listOf(
@@ -2362,13 +2368,27 @@ private fun ManageShelvesDialog(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(label, Modifier.weight(1f))
-                        NocturneSwitch(
-                            checked = key !in state.hiddenBuiltins,
-                            onCheckedChange = { shown -> onBuiltinHidden(key, !shown) },
-                            modifier = Modifier,
-                            enabled = true,
-                        
-                        )
+                        // Code 127 (audit C1): the built-in
+                        // shelf toggles wear the face's switch —
+                        // stock Switch in the Material 3 face,
+                        // NocturneSwitch in Nocturne.
+                        if (app.xreader.ui.theme.isEditorialDesign()) {
+                            androidx.compose.material3.Switch(
+                                checked = key !in state.hiddenBuiltins,
+                                onCheckedChange = { shown ->
+                                    onBuiltinHidden(key, !shown)
+                                }
+                            )
+                        } else {
+                            NocturneSwitch(
+                                checked = key !in state.hiddenBuiltins,
+                                onCheckedChange = { shown ->
+                                    onBuiltinHidden(key, !shown)
+                                },
+                                modifier = Modifier,
+                                enabled = true
+                            )
+                        }
                     }
                 }
                 Text(
@@ -3375,14 +3395,14 @@ private fun EditorialLibraryContent(
             // ── 19–26: the cover grid ───────────────────────
             if (state.loading) {
                 item(key = "paper-loading") {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 48.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        CircularProgressIndicator()
-                    }
+                    // Code 127 (audit D5): the face's loading
+                    // language (LoadingState → the M3 form:
+                    // loading indicator + what is happening),
+                    // not a bare stock spinner.
+                    LoadingState(
+                        whatIsHappening = "Loading your library…",
+                        modifier = Modifier.padding(vertical = 24.dp)
+                    )
                 }
             } else if (gridBooks.isEmpty()) {
                 item(key = "paper-empty") {
@@ -3511,6 +3531,11 @@ private fun EditorialLibraryContent(
         // Code 124 (D3): the multi-select bar — the same
         // bulk actions the Nocturne Library offers, in this
         // face's capsule language.
+        // Code 127 (audit A1): the actions now wear the
+        // face's button treatment — filled tonal buttons in
+        // the capsule, Remove error-toned — not bare
+        // TextButtons on a slab (the owner's "Not material
+        // 3" circle on this bar).
         selection?.let { picked ->
             Surface(
                 shape = RoundedCornerShape(24.dp),
@@ -3525,50 +3550,62 @@ private fun EditorialLibraryContent(
                     .fillMaxWidth()
             ) {
                 Column(
-                    Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                    Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Row(
                         Modifier.horizontalScroll(rememberScrollState()),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
                             "${picked.size} selected",
                             style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(end = 8.dp)
+                            modifier = Modifier.padding(end = 2.dp)
                         )
-                        TextButton(onClick = { shelfPickerFor = picked }) {
-                            Text("Add to shelf")
-                        }
-                        TextButton(onClick = {
-                            viewModel.bulkSetFavourite(picked, true)
-                        }) { Text("Favourite") }
-                        TextButton(onClick = { selection = null }) {
-                            Text("Done")
-                        }
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = { shelfPickerFor = picked }
+                        ) { Text("Add to shelf") }
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = {
+                                viewModel.bulkSetFavourite(picked, true)
+                            }
+                        ) { Text("Favourite") }
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = { selection = null }
+                        ) { Text("Done") }
                     }
                     Row(
                         Modifier.horizontalScroll(rememberScrollState()),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        TextButton(onClick = {
-                            viewModel.bulkDownload(picked)
-                        }) { Text("Download") }
-                        TextButton(onClick = { bulkStatusOpen = true }) {
-                            Text("Set status…")
-                        }
-                        TextButton(onClick = {
-                            viewModel.bulkSetStatus(
-                                picked,
-                                app.xreader.data.library.ReadingStatus.COMPLETED
-                            )
-                            selection = null
-                        }) { Text("Mark read") }
-                        TextButton(onClick = {
-                            bulkRemoveSize = null
-                            bulkRemoveOpen = true
-                        }) { Text("Remove…") }
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = {
+                                viewModel.bulkDownload(picked)
+                            }
+                        ) { Text("Download") }
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = { bulkStatusOpen = true }
+                        ) { Text("Set status…") }
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = {
+                                viewModel.bulkSetStatus(
+                                    picked,
+                                    app.xreader.data.library.ReadingStatus.COMPLETED
+                                )
+                                selection = null
+                            }
+                        ) { Text("Mark read") }
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = {
+                                bulkRemoveSize = null
+                                bulkRemoveOpen = true
+                            },
+                            colors = androidx.compose.material3
+                                .ButtonDefaults.filledTonalButtonColors(
+                                    contentColor = scheme.error
+                                )
+                        ) { Text("Remove…") }
                     }
                 }
             }
@@ -3577,6 +3614,8 @@ private fun EditorialLibraryContent(
 
     // Set-status dialog: the five statuses, the app's own
     // bulk write carrying the single book.
+    // Code 127 (audit C3): M3 single-choice list anatomy —
+    // radio rows in the scheme, the current status selected.
     statusDialogFor?.let { shelf ->
         val current = statusOf(shelf)
         AlertDialog(
@@ -3600,21 +3639,20 @@ private fun EditorialLibraryContent(
                                     )
                                     statusDialogFor = null
                                 }
-                                .padding(vertical = 10.dp),
+                                .padding(vertical = 6.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement =
                                 Arrangement.spacedBy(10.dp)
                         ) {
-                            if (status == current) {
-                                Icon(
-                                    Icons.Filled.Check,
-                                    contentDescription = "Current",
-                                    tint = scheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            } else {
-                                Spacer(Modifier.size(18.dp))
-                            }
+                            androidx.compose.material3.RadioButton(
+                                selected = status == current,
+                                onClick = {
+                                    viewModel.bulkSetStatus(
+                                        setOf(shelf.book.id), status
+                                    )
+                                    statusDialogFor = null
+                                }
+                            )
                             Text(m3StatusLabel(status))
                         }
                     }
@@ -3641,12 +3679,14 @@ private fun EditorialLibraryContent(
     )
     // Code 124 (D2): the shelf picker + Manage shelves,
     // shared with the Nocturne Library.
+    // Code 127 (audit C2): face list-dialog rows, as in the
+    // Nocturne copy above (DialogOptionRow branches per face).
     shelfPickerFor?.let { bookIds ->
         AlertDialog(
             onDismissRequest = { shelfPickerFor = null },
             title = { Text("Add to shelf") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     val manual = state.userShelves.filter {
                         it.kind == app.xreader.data.db.ShelfKind.MANUAL
                     }
@@ -3657,15 +3697,21 @@ private fun EditorialLibraryContent(
                         )
                     }
                     manual.forEach { shelf ->
-                        TextButton(onClick = {
-                            viewModel.addBooksToShelf(bookIds, shelf.id)
-                            shelfPickerFor = null
-                        }) { Text(shelf.name) }
+                        DialogOptionRow(
+                            label = shelf.name,
+                            onClick = {
+                                viewModel.addBooksToShelf(bookIds, shelf.id)
+                                shelfPickerFor = null
+                            }
+                        )
                     }
-                    TextButton(onClick = {
-                        shelfPickerFor = null
-                        manageShelvesOpen = true
-                    }) { Text("New shelf…") }
+                    DialogOptionRow(
+                        label = "New shelf…",
+                        onClick = {
+                            shelfPickerFor = null
+                            manageShelvesOpen = true
+                        }
+                    )
                 }
             },
             confirmButton = {},
@@ -3692,6 +3738,10 @@ private fun EditorialLibraryContent(
         )
     }
     // Code 124 (D3): bulk Set status over the selection.
+    // Code 127 (audit C3): the same radio-row anatomy as the
+    // single-book dialog — a bulk pick has no single current
+    // status, so no row starts selected; tapping a row (or
+    // its radio) applies it to the whole selection.
     if (bulkStatusOpen) {
         val picked = selection ?: emptySet()
         AlertDialog(
@@ -3714,9 +3764,19 @@ private fun EditorialLibraryContent(
                                     bulkStatusOpen = false
                                     selection = null
                                 }
-                                .padding(vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(10.dp)
                         ) {
+                            androidx.compose.material3.RadioButton(
+                                selected = false,
+                                onClick = {
+                                    viewModel.bulkSetStatus(picked, status)
+                                    bulkStatusOpen = false
+                                    selection = null
+                                }
+                            )
                             Text(m3StatusLabel(status))
                         }
                     }

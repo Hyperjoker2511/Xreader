@@ -337,13 +337,76 @@ fun GlassSheetActionRow(
  */
 @Composable
 fun DialogDangerOption(label: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Text(
-            label,
-            color = errorTextColor(),
-            modifier = Modifier.weight(1f),
-            textAlign = TextAlign.Start
-        )
+    // Code 127 (audit B1/A2): the danger row wears the active
+    // face. Editorial keeps the stock M3 text row (its dialog
+    // dress, cf. the Editorial book page's dialogs); Nocturne
+    // takes a glass row — the GlassSheetActionRow language
+    // without the icon slot — instead of a bare M3 TextButton
+    // floating in the dialog body.
+    if (app.xreader.ui.theme.isEditorialDesign()) {
+        TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+            Text(
+                label,
+                color = errorTextColor(),
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.Start
+            )
+        }
+    } else {
+        GlassCard(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = onClick,
+            contentPadding = PaddingValues(
+                horizontal = 16.dp, vertical = 12.dp
+            )
+        ) {
+            Text(
+                label,
+                color = errorTextColor(),
+                style = MaterialTheme.typography.titleSmall,
+                textAlign = TextAlign.Start
+            )
+        }
+    }
+}
+
+/**
+ * Code 127 (audit C2): one non-destructive choice row inside a
+ * dialog's body — the shelf picker's rows and their kin. The
+ * face-aware sibling of [DialogDangerOption]: Editorial wears
+ * an M3 list row; Nocturne wears a glass row.
+ */
+@Composable
+fun DialogOptionRow(label: String, onClick: () -> Unit) {
+    if (app.xreader.ui.theme.isEditorialDesign()) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onClick)
+                .padding(horizontal = 4.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+    } else {
+        GlassCard(
+            modifier = Modifier.fillMaxWidth(),
+            onClick = onClick,
+            contentPadding = PaddingValues(
+                horizontal = 16.dp, vertical = 12.dp
+            )
+        ) {
+            Text(
+                label,
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                textAlign = TextAlign.Start
+            )
+        }
     }
 }
 
@@ -504,6 +567,61 @@ fun BookDeleteDialogs(
     )
 }
 
+/**
+ * Code 127 (audit D1): the one toast, wearing the active
+ * face — the settled Patch-12 capsule toast in Nocturne
+ * (stadium shape on the tier surface, floating above the
+ * dock), the stock Snackbar in the Material 3 face (that
+ * face's official dress). Until now the Nocturne shell's
+ * SnackbarHost rendered the rectangular stock Snackbar —
+ * the capsule was designed and settled but never built.
+ * Hosts pass this as their SnackbarHost snackbar slot.
+ */
+@Composable
+fun DesignSnackbar(
+    data: androidx.compose.material3.SnackbarData,
+    modifier: Modifier = Modifier
+) {
+    if (app.xreader.ui.theme.isEditorialDesign()) {
+        androidx.compose.material3.Snackbar(
+            snackbarData = data,
+            modifier = modifier
+        )
+        return
+    }
+    Surface(
+        modifier = modifier.padding(horizontal = 24.dp, vertical = 8.dp),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shadowElevation = 6.dp,
+        border = BorderStroke(
+            1.dp, MaterialTheme.colorScheme.outline
+        )
+    ) {
+        Row(
+            Modifier.padding(
+                start = 20.dp,
+                end = if (data.visuals.actionLabel != null) 8.dp else 20.dp,
+                top = 10.dp, bottom = 10.dp
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Text(
+                data.visuals.message,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f, fill = false)
+            )
+            data.visuals.actionLabel?.let { label ->
+                TextButton(onClick = { data.performAction() }) {
+                    Text(label, color = primaryTextColor())
+                }
+            }
+        }
+    }
+}
+
 /** The design's full-pill primary action (ember amber), with the
  * Apple bounce press + haptic tick from the motion engine
  * (v1.0.4, D5: primary buttons are on the user's bounce list). */
@@ -656,27 +774,47 @@ fun EmptyState(
     } else {
         Modifier
     }
-    Column(
+    // Code 127 (audit B2): the shared empty state branches
+    // like its sibling ErrorState always did — Editorial takes
+    // the M3EmptyState form (a component of the surface, no
+    // card); Nocturne takes the KitEmptyState form (glass card,
+    // PrimaryPill door). Until now this kit rendered one plain
+    // column in both faces while LoadingState/ErrorState
+    // branched around it.
+    if (app.xreader.ui.theme.isEditorialDesign()) {
+        M3EmptyState(
+            headline = title,
+            body = message,
+            modifier = modifier.then(hoverModifier),
+            actionLabel = actionLabel,
+            onAction = onAction
+        )
+        return
+    }
+    GlassCard(
         modifier = modifier
             .then(hoverModifier)
             .fillMaxWidth()
-            .padding(horizontal = 32.dp, vertical = 48.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            title,
-            style = MaterialTheme.typography.titleLarge,
-            textAlign = TextAlign.Center
-        )
-        Text(
-            message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-        if (actionLabel != null && onAction != null) {
-            XreaderPrimaryButton(text = actionLabel, onClick = onAction)
+        Column(
+            Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center
+            )
+            Text(
+                message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            if (actionLabel != null && onAction != null) {
+                PrimaryPill(text = actionLabel, onClick = onAction)
+            }
         }
     }
 }

@@ -88,7 +88,20 @@ import androidx.compose.ui.unit.dp
 import app.xreader.komikku.setting.ReaderBottomButton
 import app.xreader.komikku.viewer.ViewerNavigation
 
-private val BarColor = Color.Black.copy(alpha = 0.82f)
+/**
+ * Code 127 (audit F7): the bars' surface — the Nocturne
+ * glass spec the local reader chrome wears (the glass
+ * system's tint of the scheme surface, honouring the
+ * user's glass style and opacity), not a hard-coded black.
+ * Text and icons on the bars take the scheme's on-surface
+ * pair, not hard-coded white. (The page indicator's shadow
+ * and the navigation overlay's region colours sit over the
+ * page art itself — data colours, untouched.)
+ */
+@Composable
+private fun readerBarColor(): Color =
+    app.xreader.ui.theme.LocalGlassSettings.current
+        .glassSurface(MaterialTheme.colorScheme.surface)
 
 // ------------------------------------------------------------ top bar
 
@@ -102,7 +115,7 @@ fun ReaderTopBar(
     onBack: () -> Unit,
     onToggleBookmark: () -> Unit
 ) {
-    Surface(color = BarColor) {
+    Surface(color = readerBarColor()) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -117,18 +130,18 @@ fun ReaderTopBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = MaterialTheme.colorScheme.onSurface)
             }
             Column(Modifier.weight(1f)) {
                 Text(
                     bookTitle,
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleSmall,
                     maxLines = 1
                 )
                 Text(
                     chapterTitle,
-                    color = Color.White.copy(alpha = 0.75f),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1
                 )
@@ -137,7 +150,7 @@ fun ReaderTopBar(
                 Icon(
                     if (chapterBookmarked) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
                     if (chapterBookmarked) "Remove chapter bookmark" else "Bookmark chapter",
-                    tint = Color.White
+                    tint = MaterialTheme.colorScheme.onSurface
                 )
             }
         }
@@ -165,17 +178,17 @@ fun ChapterNavigator(
     var sliderValue by remember(currentPage) {
         mutableFloatStateOf((currentPage + 1).toFloat())
     }
-    Surface(color = BarColor, modifier = modifier.fillMaxWidth()) {
+    Surface(color = readerBarColor(), modifier = modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onPreviousChapter, enabled = hasPreviousChapter) {
-                Icon(Icons.Filled.SkipPrevious, "Previous chapter", tint = Color.White)
+                Icon(Icons.Filled.SkipPrevious, "Previous chapter", tint = MaterialTheme.colorScheme.onSurface)
             }
             Text(
                 "${sliderValue.toInt()}",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.width(32.dp)
             )
@@ -194,12 +207,12 @@ fun ChapterNavigator(
             )
             Text(
                 "$totalPages",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.width(32.dp)
             )
             IconButton(onClick = onNextChapter, enabled = hasNextChapter) {
-                Icon(Icons.Filled.SkipNext, "Next chapter", tint = Color.White)
+                Icon(Icons.Filled.SkipNext, "Next chapter", tint = MaterialTheme.colorScheme.onSurface)
             }
         }
     }
@@ -268,13 +281,13 @@ fun ChapterNavigatorVert(
         IconButton(onClick = onPreviousChapter, enabled = hasPreviousChapter) {
             Icon(
                 Icons.Filled.SkipPrevious, "Previous chapter",
-                tint = Color.White
+                tint = MaterialTheme.colorScheme.onSurface
             )
         }
         // Current-page label: above the track, outside it.
         Text(
             presentation.currentLabel,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.labelMedium
         )
         // The slim rail + pill thumb (no band behind either).
@@ -306,7 +319,7 @@ fun ChapterNavigatorVert(
                     .fillMaxHeight()
                     .width(4.dp)
                     .clip(androidx.compose.foundation.shape.RoundedCornerShape(2.dp))
-                    .background(Color.White.copy(alpha = 0.28f))
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f))
             )
             // Pill thumb riding the rail at the page fraction.
             ScrubberPillThumb(fraction = presentation.thumbFraction)
@@ -314,13 +327,13 @@ fun ChapterNavigatorVert(
         // Total label: below the track, outside it.
         Text(
             presentation.totalLabel,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.labelMedium
         )
         IconButton(onClick = onNextChapter, enabled = hasNextChapter) {
             Icon(
                 Icons.Filled.SkipNext, "Next chapter",
-                tint = Color.White
+                tint = MaterialTheme.colorScheme.onSurface
             )
         }
     }
@@ -371,7 +384,7 @@ fun ReaderBottomBar(
     onToggleExhUtils: () -> Unit,
     onSettings: () -> Unit
 ) {
-    Surface(color = BarColor) {
+    Surface(color = readerBarColor()) {
         Row(
             Modifier
                 .fillMaxWidth()
@@ -381,22 +394,22 @@ fun ReaderBottomBar(
         ) {
             if (ReaderBottomButton.ViewChapters.isIn(buttons)) {
                 IconButton(onClick = onViewChapters) {
-                    Icon(Icons.Filled.Bookmarks, "Chapters", tint = Color.White)
+                    Icon(Icons.Filled.Bookmarks, "Chapters", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
             if (ReaderBottomButton.Share.isIn(buttons)) {
                 IconButton(onClick = onShare) {
-                    Icon(Icons.Filled.Share, "Share chapter", tint = Color.White)
+                    Icon(Icons.Filled.Share, "Share chapter", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
             if (ReaderBottomButton.ReadingMode.isIn(buttons)) {
                 IconButton(onClick = onReadingMode) {
-                    Icon(Icons.Filled.MenuBook, "Reading mode", tint = Color.White)
+                    Icon(Icons.Filled.MenuBook, "Reading mode", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
             if (ReaderBottomButton.Rotation.isIn(buttons)) {
                 IconButton(onClick = onRotation) {
-                    Icon(Icons.Filled.ScreenRotation, "Rotation", tint = Color.White)
+                    Icon(Icons.Filled.ScreenRotation, "Rotation", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
             val cropInSet = if (isPager) {
@@ -410,24 +423,24 @@ fun ReaderBottomBar(
                     Icon(
                         if (cropBordersActive) Icons.Filled.CropFree else Icons.Filled.Crop,
                         "Crop borders",
-                        tint = Color.White
+                        tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
             }
             if (showShiftDoublePages) {
                 IconButton(onClick = onShiftDoublePages) {
-                    Icon(Icons.Filled.SwapHoriz, "Shift double pages", tint = Color.White)
+                    Icon(Icons.Filled.SwapHoriz, "Shift double pages", tint = MaterialTheme.colorScheme.onSurface)
                 }
             } else if (ReaderBottomButton.PageLayout.isIn(buttons) && isPager) {
                 IconButton(onClick = onPageLayout) {
-                    Icon(Icons.Filled.MenuBook, "Page layout", tint = Color.White)
+                    Icon(Icons.Filled.MenuBook, "Page layout", tint = MaterialTheme.colorScheme.onSurface)
                 }
             }
             IconButton(onClick = onToggleExhUtils) {
-                Icon(Icons.Filled.Build, "Reader tools", tint = Color.White)
+                Icon(Icons.Filled.Build, "Reader tools", tint = MaterialTheme.colorScheme.onSurface)
             }
             IconButton(onClick = onSettings) {
-                Icon(Icons.Filled.Settings, "Reader settings", tint = Color.White)
+                Icon(Icons.Filled.Settings, "Reader settings", tint = MaterialTheme.colorScheme.onSurface)
             }
         }
     }
@@ -446,7 +459,7 @@ fun ExhUtilsStrip(
     onBoostPage: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Surface(color = BarColor, modifier = modifier.fillMaxWidth()) {
+    Surface(color = readerBarColor(), modifier = modifier.fillMaxWidth()) {
         Row(
             Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -459,14 +472,14 @@ fun ExhUtilsStrip(
                     } else {
                         "Auto-scroll"
                     },
-                    color = Color.White
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
             androidx.compose.material3.TextButton(onClick = onRetryAll) {
-                Text("Retry all", color = Color.White)
+                Text("Retry all", color = MaterialTheme.colorScheme.onSurface)
             }
             androidx.compose.material3.TextButton(onClick = onBoostPage) {
-                Text("Boost page", color = Color.White)
+                Text("Boost page", color = MaterialTheme.colorScheme.onSurface)
             }
         }
     }

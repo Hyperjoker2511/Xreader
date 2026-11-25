@@ -17,7 +17,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -152,15 +151,18 @@ fun LocalDocReaderScreen(
             snackbar = snackbar,
             onClose = onClose
         ) {
-            Column(
+            // Code 127 (audit D4): the dressed LoadingState
+            // (it branches per face and names the phase —
+            // v1.5.8 F4's law), not a bare spinner over a
+            // phase line.
+            Box(
                 Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
+                contentAlignment = Alignment.Center
             ) {
-                CircularProgressIndicator()
-                Spacer(Modifier.height(16.dp))
-                // v1.5.8 (F4): the state names its phase.
-                Text(current.phase)
+                app.xreader.ui.common.LoadingState(
+                    whatIsHappening = current.phase,
+                    modifier = Modifier.padding(24.dp)
+                )
             }
         }
 
@@ -238,6 +240,12 @@ fun LocalDocReaderScreen(
 
     if (passwordOpen) {
         var password by remember { mutableStateOf("") }
+        // Code 127 (audit C14) note: shared by both faces'
+        // local PDF readers — stock field + TextButton
+        // actions under the active theme root is both faces'
+        // dressed prompt anatomy (its online-reader twin at
+        // ReaderScreen carries the same shape); no
+        // face-specific control lives inside to branch.
         AlertDialog(
             onDismissRequest = { passwordOpen = false },
             title = { Text("PDF password") },
@@ -274,7 +282,17 @@ private fun StateScaffold(
     content: @Composable () -> Unit
 ) {
     Scaffold(
-        snackbarHost = { SnackbarHost(snackbar) },
+        // Code 127 (audit D4): the face-branched toast host
+        // (capsule in Nocturne, stock in the Material 3 face),
+        // not a second stock host.
+        snackbarHost = {
+            SnackbarHost(
+                snackbar,
+                snackbar = { data ->
+                    app.xreader.ui.common.DesignSnackbar(data)
+                }
+            )
+        },
         topBar = {
             TopAppBar(
                 title = {

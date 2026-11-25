@@ -511,6 +511,11 @@ fun SourceStoreScreen(
         }
     }
 
+    // Code 127 (audit C7) note: shared by both faces' stores
+    // on purpose — its anatomy (title + body + TextButton
+    // Remove/Cancel under the active theme root) is identical
+    // to both faces' dressed remove dialogs (History, Profile,
+    // Sync); it holds no face-specific control to branch.
     pendingRepoRemoval?.let { repo ->
         AlertDialog(
             onDismissRequest = { pendingRepoRemoval = null },

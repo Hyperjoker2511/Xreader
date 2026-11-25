@@ -127,6 +127,16 @@ object ColourWheelMath {
     }
 }
 
+/**
+ * Code 127 (audit C16) note: examined in the dress round and
+ * left shared on purpose, on the same evidence as its twin
+ * ColourPickerDialog (C15) — the stock AlertDialog frame
+ * under the active theme root is both faces' dressed dialog
+ * frame; the interior holds no face-specific control (the
+ * wheel/square/strip canvases are register-excluded data
+ * colour; the hex field and TextButton actions are both
+ * faces' editor dress).
+ */
 @Composable
 fun ColourWheelPickerDialog(
     title: String,

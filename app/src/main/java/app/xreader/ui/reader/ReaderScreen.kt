@@ -2994,6 +2994,12 @@ private fun PdfReaderHost(
                 )
             }
             var password by remember { mutableStateOf("") }
+            // Code 127 (audit C11) note: shared by both faces'
+            // PDF readers — stock field + TextButton actions
+            // under the active theme root is both faces'
+            // dressed prompt anatomy (its local-reader twin
+            // carries the same shape); no face-specific
+            // control lives inside to branch.
             AlertDialog(
                 onDismissRequest = onBack,
                 title = { Text("Password needed") },

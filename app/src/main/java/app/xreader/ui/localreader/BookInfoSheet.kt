@@ -561,7 +561,7 @@ internal fun BookInfoSheetContent(
                             tint = if (star <= model.starRating) {
                                 readerChromeAccent()
                             } else {
-                                ReaderMutedText
+                                readerChromeMuted()
                             }
                         )
                     }
@@ -589,8 +589,8 @@ internal fun BookInfoSheetContent(
                 colors = SwitchDefaults.colors(
                     checkedTrackColor = readerChromeAccent(),
                     checkedThumbColor = Color.White,
-                    uncheckedTrackColor = ReaderTier2Surface,
-                    uncheckedThumbColor = ReaderMutedText
+                    uncheckedTrackColor = readerChromeTier(),
+                    uncheckedThumbColor = readerChromeMuted()
                 )
             )
         }

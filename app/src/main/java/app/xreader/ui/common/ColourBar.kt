@@ -321,6 +321,16 @@ private val RainbowStops: List<Color> = listOf(
  * an M3 basic dialog; under Nocturne the same component in
  * Nocturne's frame, §5.2). "Use this colour" commits through
  * [onPick] with an opaque ARGB; dismissing changes nothing.
+ *
+ * Code 127 (audit C15) note: examined in the dress round and
+ * left shared on purpose — the frame is the stock AlertDialog
+ * under the active theme root, which IS both faces' dressed
+ * dialog frame (the benchmark pairs — Sync, History, Profile,
+ * book page — are the same stock frame; dress enters through
+ * face-specific controls inside, and this dialog holds none:
+ * the picker canvas is register-excluded data colour, the
+ * hex field and the TextButton actions are both faces'
+ * editor dress).
  */
 @Composable
 fun ColourPickerDialog(

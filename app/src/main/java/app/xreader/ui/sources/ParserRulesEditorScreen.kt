@@ -37,6 +37,36 @@ import app.xreader.ui.theme.LocalUiMetrics
 import app.xreader.ui.theme.bottomContentPadding
 
 /**
+ * Code 127 (audit F2): this screen's group card, wearing the
+ * active face — the M3 sources-kit Card (surfaceContainerLow,
+ * medium shape, cf. ProviderPackCardM3) in the Material 3
+ * design, the GlassCard in Nocturne. The whole screen used
+ * to wear Nocturne glass + NocturneSwitch unconditionally,
+ * inside the Editorial face too.
+ */
+@Composable
+private fun ParserCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit
+) {
+    if (app.xreader.ui.theme.isM3FamilyDesign()) {
+        androidx.compose.material3.Card(
+            colors = androidx.compose.material3.CardDefaults
+                .cardColors(
+                    containerColor =
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                ),
+            shape = MaterialTheme.shapes.medium,
+            modifier = modifier
+        ) {
+            Column(Modifier.padding(16.dp)) { content() }
+        }
+    } else {
+        GlassCard(modifier = modifier) { content() }
+    }
+}
+
+/**
  * "Edit parser rules" (v1.0.4, D14): the stored rules of a
  * link/AI-built source as plain-labelled fields, grouped the way
  * the reading path uses them. Saving is gated in the ViewModel:
@@ -134,7 +164,7 @@ fun ParserRulesEditorScreen(
                 onChange = { fields = fields.copy(popular = it) }
             )
 
-            GlassCard {
+            ParserCard {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SectionHeader(title = "Book page")
                     Text(
@@ -158,7 +188,7 @@ fun ParserRulesEditorScreen(
                 }
             }
 
-            GlassCard {
+            ParserCard {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SectionHeader(title = "Chapters")
                     RuleField("Each chapter row", fields.chapterList, editable) {
@@ -185,18 +215,31 @@ fun ParserRulesEditorScreen(
                                     .onSurfaceVariant
                             )
                         }
-                        NocturneSwitch(
-                            checked = fields.chapterReverse,
-                            onCheckedChange = {
-                                fields = fields.copy(chapterReverse = it)
-                            },
-                            enabled = editable
-                        )
+                        // Code 127 (audit F2): the face's
+                        // switch — stock in the Material 3
+                        // face, NocturneSwitch in Nocturne.
+                        if (app.xreader.ui.theme.isEditorialDesign()) {
+                            androidx.compose.material3.Switch(
+                                checked = fields.chapterReverse,
+                                onCheckedChange = {
+                                    fields = fields.copy(chapterReverse = it)
+                                },
+                                enabled = editable
+                            )
+                        } else {
+                            NocturneSwitch(
+                                checked = fields.chapterReverse,
+                                onCheckedChange = {
+                                    fields = fields.copy(chapterReverse = it)
+                                },
+                                enabled = editable
+                            )
+                        }
                     }
                 }
             }
 
-            GlassCard {
+            ParserCard {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     SectionHeader(title = "Chapter text")
                     RuleField("Story text block", fields.contentSelector, editable) {
@@ -298,7 +341,7 @@ private fun ListingFieldsGroup(
     onChange: (ParserRulesEditor.ListingFields) -> Unit,
     editable: Boolean = true
 ) {
-    GlassCard {
+    ParserCard {
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             SectionHeader(title = title)
             note?.let {

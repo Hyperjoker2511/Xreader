@@ -520,6 +520,12 @@ fun ReaderSelectionMenuHost(
  * The Dictionary result, presented exactly as the EPUB
  * reader presents it: the word as the title, the definition
  * — or the same "no entry" line — as the body.
+ *
+ * Code 127 (audit C9) note: shared by both faces' readers on
+ * purpose — title + body + TextButton actions under the
+ * active theme root is both faces' dressed dialog anatomy,
+ * and it holds no face-specific control to branch (its EPUB
+ * twin at EpubSelection carries the same shape).
  */
 @Composable
 fun DictionaryResultDialog(
@@ -605,10 +611,20 @@ fun SelectionTranslateDialog(
                         style = MaterialTheme.typography.bodyLarge
                     )
                     if (providerName != null) {
-                        androidx.compose.material3.AssistChip(
-                            onClick = {},
-                            label = { Text(providerName) }
-                        )
+                        // Code 127 (audit C10): the provenance
+                        // chip wears the face — the kit chip in
+                        // Nocturne, the stock AssistChip in the
+                        // Material 3 face.
+                        if (app.xreader.ui.theme.isEditorialDesign()) {
+                            androidx.compose.material3.AssistChip(
+                                onClick = {},
+                                label = { Text(providerName) }
+                            )
+                        } else {
+                            app.xreader.ui.common.NocturneChip(
+                                label = providerName
+                            )
+                        }
                     }
                 }
             }

@@ -14,9 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -700,20 +698,15 @@ fun PdfReflowSurface(
 
     val lookup = dictionary
     if (lookup != null) {
-        AlertDialog(
-            onDismissRequest = { dictionary = null },
-            title = { Text(lookup.first) },
-            text = {
-                Text(
-                    lookup.second
-                        ?: "No definition found on this device."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { dictionary = null }) {
-                    Text("Close")
-                }
-            }
+        // Code 127 (audit C12): the shared dictionary dialog
+        // (ReaderSelection), as in the pages surface — the
+        // fallback line passes through so the words stay
+        // exactly this surface's own.
+        DictionaryResultDialog(
+            word = lookup.first,
+            definition = lookup.second
+                ?: "No definition found on this device.",
+            onDismiss = { dictionary = null }
         )
     }
 }

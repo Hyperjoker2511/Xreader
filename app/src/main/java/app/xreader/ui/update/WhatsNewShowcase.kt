@@ -543,6 +543,31 @@ fun WhatsNewShowcase(onFinish: () -> Unit) {
     // so the showcase returned on the next launch — the
     // repeat the owner saw.
     androidx.activity.compose.BackHandler { onFinish() }
+    // Code 127 (audit G1): TRULY MODAL, like the design
+    // reveal — the showcase used to be composed inline in
+    // the shell, so app chrome and gestures leaked around
+    // it. Same Dialog contract as WhatsNewRevealEditorial:
+    // full-bleed, Back dismisses (writing seen), no
+    // click-outside dismiss. The pager inside wears the
+    // active face (see WhatsNewShowcasePager).
+    Dialog(
+        onDismissRequest = onFinish,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    ) {
+        WhatsNewShowcasePager(onFinish = onFinish)
+    }
+}
+
+@Composable
+private fun WhatsNewShowcasePager(onFinish: () -> Unit) {
+    // Code 127 (audit G1): the Nocturne chrome — glass
+    // feature cards and the kit's pills — under Nocturne;
+    // the Material 3 face keeps its Card + Button form.
+    val nocturne = !app.xreader.ui.theme.isEditorialDesign()
     val features = remember {
         listOf(
             ShowcaseFeature(
@@ -615,57 +640,23 @@ fun WhatsNewShowcase(onFinish: () -> Unit) {
                 pageSpacing = 16.dp
             ) { page ->
                 val feature = features[page]
-                Card(
-                    shape = MaterialTheme.shapes.extraLarge,
-                    colors = CardDefaults.cardColors(
-                        containerColor =
-                            MaterialTheme.colorScheme
-                                .surfaceContainer
-                    ),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    Column(Modifier.fillMaxSize()) {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .background(
-                                    MaterialTheme.colorScheme
-                                        .surfaceContainerHigh
-                                ),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            when (feature.demo) {
-                                ShowcaseDemo.PDF_WASH ->
-                                    PdfHighlightWashDemo()
-                                ShowcaseDemo.FILMSTRIP ->
-                                    FilmstripDemo()
-                                ShowcaseDemo.AI_PAGE ->
-                                    AskAiPageDemo()
-                                ShowcaseDemo.HISTORY ->
-                                    HistoryFixedDemo()
-                                ShowcaseDemo.BOOK_PAGE ->
-                                    BookPageDemo()
-                            }
-                        }
-                        Column(
-                            Modifier.padding(20.dp),
-                            verticalArrangement =
-                                Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text(
-                                feature.title,
-                                style = MaterialTheme.typography
-                                    .titleLargeEmphasized
-                            )
-                            Text(
-                                feature.body,
-                                style = MaterialTheme.typography
-                                    .bodyMedium,
-                                color = MaterialTheme.colorScheme
-                                    .onSurfaceVariant
-                            )
-                        }
+                if (nocturne) {
+                    app.xreader.ui.common.GlassCard(
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        ShowcaseFeatureContent(feature)
+                    }
+                } else {
+                    Card(
+                        shape = MaterialTheme.shapes.extraLarge,
+                        colors = CardDefaults.cardColors(
+                            containerColor =
+                                MaterialTheme.colorScheme
+                                    .surfaceContainer
+                        ),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        ShowcaseFeatureContent(feature)
                     }
                 }
             }
@@ -674,7 +665,15 @@ fun WhatsNewShowcase(onFinish: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                TextButton(onClick = onFinish) { Text("Skip") }
+                if (nocturne) {
+                    app.xreader.ui.common.GhostPill(
+                        text = "Skip",
+                        enabled = true,
+                        onClick = onFinish
+                    )
+                } else {
+                    TextButton(onClick = onFinish) { Text("Skip") }
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     features.indices.forEach { index ->
                         Box(
@@ -695,32 +694,86 @@ fun WhatsNewShowcase(onFinish: () -> Unit) {
                         )
                     }
                 }
-                Button(
-                    onClick = {
-                        if (pagerState.currentPage <
-                            features.lastIndex
-                        ) {
-                            scope.launch {
-                                pagerState.animateScrollToPage(
-                                    pagerState.currentPage + 1
-                                )
-                            }
-                        } else {
-                            onFinish()
-                        }
-                    }
+                val nextLabel = if (pagerState.currentPage <
+                    features.lastIndex
                 ) {
-                    Text(
-                        if (pagerState.currentPage <
-                            features.lastIndex
-                        ) {
-                            "Next"
-                        } else {
-                            "Done"
+                    "Next"
+                } else {
+                    "Done"
+                }
+                val onNext: () -> Unit = {
+                    if (pagerState.currentPage <
+                        features.lastIndex
+                    ) {
+                        scope.launch {
+                            pagerState.animateScrollToPage(
+                                pagerState.currentPage + 1
+                            )
                         }
+                    } else {
+                        onFinish()
+                    }
+                }
+                if (nocturne) {
+                    app.xreader.ui.common.PrimaryPill(
+                        text = nextLabel,
+                        onClick = onNext
                     )
+                } else {
+                    Button(onClick = onNext) { Text(nextLabel) }
                 }
             }
+        }
+    }
+}
+
+/** One feature card's insides — the demo stage over the
+ * title and body — shared by both faces' card containers
+ * (code 127, audit G1). */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ShowcaseFeatureContent(feature: ShowcaseFeature) {
+    Column(Modifier.fillMaxSize()) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .weight(1f)
+                .background(
+                    MaterialTheme.colorScheme
+                        .surfaceContainerHigh
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            when (feature.demo) {
+                ShowcaseDemo.PDF_WASH ->
+                    PdfHighlightWashDemo()
+                ShowcaseDemo.FILMSTRIP ->
+                    FilmstripDemo()
+                ShowcaseDemo.AI_PAGE ->
+                    AskAiPageDemo()
+                ShowcaseDemo.HISTORY ->
+                    HistoryFixedDemo()
+                ShowcaseDemo.BOOK_PAGE ->
+                    BookPageDemo()
+            }
+        }
+        Column(
+            Modifier.padding(20.dp),
+            verticalArrangement =
+                Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                feature.title,
+                style = MaterialTheme.typography
+                    .titleLargeEmphasized
+            )
+            Text(
+                feature.body,
+                style = MaterialTheme.typography
+                    .bodyMedium,
+                color = MaterialTheme.colorScheme
+                    .onSurfaceVariant
+            )
         }
     }
 }

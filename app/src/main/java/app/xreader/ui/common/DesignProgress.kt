@@ -1,8 +1,11 @@
 package app.xreader.ui.common
 
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import app.xreader.ui.theme.isM3FamilyDesign
 
 /**
  * Code 120, references updated in code 121 (scratch §3.10
@@ -15,26 +18,43 @@ import androidx.compose.ui.Modifier
  * (StateKit). Call sites opt in per surface; other progress
  * lines are deliberately untouched. The circular wavy form
  * lives in StateKit as DesignCircularWavyProgress.
+ *
+ * Code 124 removed the wavy branch when the old MATERIAL3
+ * design went away; code 127 (audit B3) restores it for the
+ * surviving Material 3 design — the kit's own header never
+ * stopped promising the branch, the M3 What's-New page and
+ * Updates & about felt the plain bar through this kit while
+ * UpdateCard hard-coded wavy directly, and the owner's Q11
+ * ruling (wavy progress for long jobs in the Material 3
+ * face) is the standing word.
  */
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun DesignLinearProgress(
     progress: () -> Float,
     modifier: Modifier = Modifier
 ) {
-    // Code 124: the wavy branch belonged to the removed
-    // MATERIAL3 design. Both surviving designs take the plain
-    // indicator here (the Material 3 design's own progress
-    // language is the plain bar — code 123 deviation #6);
-    // wavy progress still lives at its direct call sites.
-    LinearProgressIndicator(
-        progress = progress,
-        modifier = modifier
-    )
+    if (isM3FamilyDesign()) {
+        LinearWavyProgressIndicator(
+            progress = progress,
+            modifier = modifier
+        )
+    } else {
+        LinearProgressIndicator(
+            progress = progress,
+            modifier = modifier
+        )
+    }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun DesignLinearProgressIndeterminate(
     modifier: Modifier = Modifier
 ) {
-    LinearProgressIndicator(modifier = modifier)
+    if (isM3FamilyDesign()) {
+        LinearWavyProgressIndicator(modifier = modifier)
+    } else {
+        LinearProgressIndicator(modifier = modifier)
+    }
 }

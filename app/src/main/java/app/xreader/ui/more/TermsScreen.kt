@@ -233,7 +233,11 @@ fun TermsEditor(
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f)
                         )
-                        Switch(
+                        // Code 127 (audit C17): the kit
+                        // switch in the Nocturne editor (the
+                        // M3 copy's stock Switch is that face's
+                        // own dress and stays).
+                        app.xreader.ui.common.NocturneSwitch(
                             checked = draftMatchCase,
                             onCheckedChange = { draftMatchCase = it }
                         )
@@ -244,7 +248,7 @@ fun TermsEditor(
                             style = MaterialTheme.typography.bodyMedium,
                             modifier = Modifier.weight(1f)
                         )
-                        Switch(
+                        app.xreader.ui.common.NocturneSwitch(
                             checked = draftWholeWord,
                             onCheckedChange = { draftWholeWord = it }
                         )

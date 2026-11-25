@@ -115,23 +115,34 @@ fun M3SwitchRow(
     ListItem(
         headlineContent = { Text(label) },
         trailingContent = {
-            Switch(
-                checked = checked,
-                onCheckedChange = onCheckedChange,
-                thumbContent = if (checked) {
-                    {
-                        Icon(
-                            Icons.Filled.Check,
-                            contentDescription = null,
-                            modifier = Modifier.size(
-                                SwitchDefaults.IconSize
+            // Code 127 (audit F7): this sheet serves both
+            // faces' manga readers — the switch wears the
+            // face: the kit switch in Nocturne, the stock
+            // check-thumb switch in the Material 3 face.
+            if (app.xreader.ui.theme.isEditorialDesign()) {
+                Switch(
+                    checked = checked,
+                    onCheckedChange = onCheckedChange,
+                    thumbContent = if (checked) {
+                        {
+                            Icon(
+                                Icons.Filled.Check,
+                                contentDescription = null,
+                                modifier = Modifier.size(
+                                    SwitchDefaults.IconSize
+                                )
                             )
-                        )
+                        }
+                    } else {
+                        null
                     }
-                } else {
-                    null
-                }
-            )
+                )
+            } else {
+                app.xreader.ui.common.NocturneSwitch(
+                    checked = checked,
+                    onCheckedChange = onCheckedChange
+                )
+            }
         },
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         modifier = Modifier.clickable { onCheckedChange(!checked) }

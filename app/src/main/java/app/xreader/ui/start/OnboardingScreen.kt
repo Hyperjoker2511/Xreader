@@ -82,6 +82,14 @@ fun OnboardingScreen(
     // around it (welcome, ask, sources, companion).
     val pageCount = PAGES.size + 1
     val last = pageCount - 1
+    // Code 127 (audit G2): the pager chrome wears the primed
+    // design — under a Material 3 prime the text pages carry
+    // no halo blooms and the primary action is the stock
+    // Button; the halo + PrimaryPill are Nocturne's chrome.
+    // (DesignAskPage itself stays the deliberate neutral
+    // exception, as settled.)
+    val editorialPrimed = designState.design ==
+        app.xreader.data.prefs.AppDesign.EDITORIAL
     // v1.0.2 (R01): themed Surface root — before, this bare Column had
     // no LocalContentColor provider, so colour-less text rendered in
     // the default black over the dark window (the Recovery defect).
@@ -121,36 +129,38 @@ fun OnboardingScreen(
             } else {
             val textPage = if (current == 0) 0 else current - 1
             Box(Modifier.fillMaxSize()) {
-                Box(
-                    Modifier
-                        .align(Alignment.TopCenter)
-                        .offset(y = (-48).dp)
-                        .size(320.dp)
-                        .background(
-                            Brush.radialGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.primary
-                                        .copy(alpha = 0.16f),
-                                    Color.Transparent
+                if (!editorialPrimed) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopCenter)
+                            .offset(y = (-48).dp)
+                            .size(320.dp)
+                            .background(
+                                Brush.radialGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.primary
+                                            .copy(alpha = 0.16f),
+                                        Color.Transparent
+                                    )
                                 )
                             )
-                        )
-                )
-                Box(
-                    Modifier
-                        .align(Alignment.TopStart)
-                        .offset(x = (-64).dp, y = 150.dp)
-                        .size(240.dp)
-                        .background(
-                            Brush.radialGradient(
-                                listOf(
-                                    MaterialTheme.colorScheme.tertiary
-                                        .copy(alpha = 0.13f),
-                                    Color.Transparent
+                    )
+                    Box(
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .offset(x = (-64).dp, y = 150.dp)
+                            .size(240.dp)
+                            .background(
+                                Brush.radialGradient(
+                                    listOf(
+                                        MaterialTheme.colorScheme.tertiary
+                                            .copy(alpha = 0.13f),
+                                        Color.Transparent
+                                    )
                                 )
                             )
-                        )
-                )
+                    )
+                }
                 Column(
                     Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.Center
@@ -191,11 +201,21 @@ fun OnboardingScreen(
                     )
                 }
             }
-            PrimaryPill(
-                text = if (page == last) "Get started" else "Next",
-                enabled = true,
-                onClick = { if (page == last) onDone() else page++ }
-            )
+            if (editorialPrimed) {
+                androidx.compose.material3.Button(
+                    onClick = {
+                        if (page == last) onDone() else page++
+                    }
+                ) {
+                    Text(if (page == last) "Get started" else "Next")
+                }
+            } else {
+                PrimaryPill(
+                    text = if (page == last) "Get started" else "Next",
+                    enabled = true,
+                    onClick = { if (page == last) onDone() else page++ }
+                )
+            }
         }
     }
     }

@@ -475,13 +475,34 @@ fun SelectionBar(
                                         .colorScheme.primary
                                 )
                             }
+                            // Code 127 (audit E3): the More
+                            // menu wears the bar's own surface
+                            // in each face — it used to be the
+                            // stock menu under both bars.
+                            // Editorial: surfaceContainerHigh +
+                            // the FloatingToolbar extraLarge
+                            // shape the bar itself takes.
+                            // Nocturne: the bar's 16dp capsule
+                            // form with its outline border.
                             DropdownMenu(
                                 expanded = state.moreOpen,
                                 onDismissRequest = {
                                     onStateChange(
                                         state.copy(moreOpen = false)
                                     )
-                                }
+                                },
+                                shape = if (isM3Bar) {
+                                    MaterialTheme.shapes.extraLarge
+                                } else {
+                                    RoundedCornerShape(16.dp)
+                                },
+                                containerColor = MaterialTheme
+                                    .colorScheme.surfaceContainerHigh,
+                                border = BorderStroke(
+                                    1.dp,
+                                    MaterialTheme.colorScheme
+                                        .outlineVariant
+                                )
                             ) {
                                 renderedMore.forEach { item ->
                                     DropdownMenuItem(

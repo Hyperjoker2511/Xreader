@@ -55,7 +55,6 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Tune
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -63,7 +62,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -1149,20 +1147,16 @@ private fun PdfSelectionDialogs(
     }
     val lookup = state.dictionary
     if (lookup != null) {
-        AlertDialog(
-            onDismissRequest = { state.dictionary = null },
-            title = { Text(lookup.first) },
-            text = {
-                Text(
-                    lookup.second
-                        ?: "No definition found on this device."
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { state.dictionary = null }
-                ) { Text("Close") }
-            }
+        // Code 127 (audit C12): the shared dictionary dialog
+        // (ReaderSelection) — this surface and the reflow
+        // surface each carried a private copy; the fallback
+        // line is passed through so the words stay exactly
+        // this surface's own.
+        DictionaryResultDialog(
+            word = lookup.first,
+            definition = lookup.second
+                ?: "No definition found on this device.",
+            onDismiss = { state.dictionary = null }
         )
     }
 }

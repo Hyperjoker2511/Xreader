@@ -20,7 +20,6 @@ import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.LibraryBooks
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -43,9 +42,12 @@ import app.xreader.ui.theme.bottomContentPadding
 import app.xreader.core.motion.listPlacementSpec
 import app.xreader.data.db.OpdsServer
 import app.xreader.data.opds.OpdsEntry
+import app.xreader.ui.common.ErrorState
 import app.xreader.ui.common.GhostPill
 import app.xreader.ui.common.GlassCard
 import app.xreader.ui.common.KitEmptyState
+import app.xreader.ui.common.LoadingState
+import app.xreader.ui.common.M3EmptyState
 import app.xreader.ui.common.NocturneChip
 import app.xreader.ui.common.PrimaryPill
 import app.xreader.ui.common.ScreenHeader
@@ -112,21 +114,20 @@ fun BrowseScreen(
             }
         ) { padding ->
             if (servers.isEmpty()) {
-                Column(
-                    Modifier
+                // Code 127 (audit D6): the face's empty state
+                // (headline + body + the door that fills it),
+                // not one bare text line.
+                M3EmptyState(
+                    headline = "No servers yet",
+                    body = "Add a library server (Komga, Kavita " +
+                        "or Calibre-Web) to browse and download " +
+                        "your books.",
+                    modifier = Modifier
                         .fillMaxSize()
-                        .padding(padding)
-                        .padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    Text(
-                        "No servers yet. Add a library server " +
-                            "(Komga, Kavita or Calibre-Web) to " +
-                            "browse and download your books.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+                        .padding(padding),
+                    actionLabel = "Add a server",
+                    onAction = { showAddForm = true }
+                )
             } else {
                 LazyColumn(
                     Modifier
@@ -681,16 +682,22 @@ fun OpdsCatalogScreen(
         }
         Spacer(Modifier.height(12.dp))
         when {
-            state.loading -> Column(
-                Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) { CircularProgressIndicator() }
-
-            state.errorMessage != null -> KitEmptyState(
-                icon = Icons.Filled.ErrorOutline,
-                message = "The catalog didn't load — " + (state.errorMessage ?: ""),
+            // Code 127 (audit D2): the dressed state kit —
+            // LoadingState (says what is happening) and
+            // ErrorState with a working Retry door, replacing
+            // a bare spinner and an error dressed as an empty
+            // state with no way back.
+            state.loading -> LoadingState(
+                whatIsHappening = "Loading the catalog…",
                 modifier = Modifier.weight(1f)
+            )
+
+            state.errorMessage != null -> ErrorState(
+                reason = "The catalog didn't load — " +
+                    (state.errorMessage ?: ""),
+                modifier = Modifier.weight(1f),
+                actionLabel = "Retry",
+                onAction = { viewModel.retry() }
             )
 
             state.feed != null -> LazyColumn(

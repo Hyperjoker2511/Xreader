@@ -161,6 +161,33 @@ val ReaderTier2Surface: Color = Color(0xFF161822)
 /** DESIGN.md muted text (#94a3b8): unselected chip labels. */
 val ReaderMutedText: Color = Color(0xFF94A3B8)
 
+/**
+ * Code 127 (audit F3): the tier/muted pair under the ACTIVE
+ * design, beside [readerChromeAccent] — under Nocturne the
+ * DESIGN.md constants exactly as shipped; under Material 3
+ * the scheme's `surfaceContainer` / `onSurfaceVariant`, so
+ * the local-reader chrome's unselected chips and off-state
+ * switches stop wearing Nocturne's tiers inside the M3
+ * design. Composable spend sites resolve through here; the
+ * pure spec functions keep the constants as their defaults
+ * (their pinned tests hold the Nocturne values).
+ */
+@Composable
+internal fun readerChromeTier(): Color =
+    if (LocalDesignState.current.design != AppDesign.NOCTURNE) {
+        MaterialTheme.colorScheme.surfaceContainer
+    } else {
+        ReaderTier2Surface
+    }
+
+@Composable
+internal fun readerChromeMuted(): Color =
+    if (LocalDesignState.current.design != AppDesign.NOCTURNE) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        ReaderMutedText
+    }
+
 /** What sits BEHIND a reader-chrome surface (sift A-8).
  * [RASTERISED] — app-drawn content (the PDF page canvas,
  * Compose surfaces): backdrop blur is licensed. [WEBVIEW] —
@@ -278,7 +305,13 @@ fun readerChipSpec(
      * Nocturne value the spec's tests pin; composable callers
      * pass [readerChromeAccent] so Material 3 spends its
      * scheme primary instead. */
-    accent: Color = ReaderViolet
+    accent: Color = ReaderViolet,
+    /** Code 127 (audit F3): the unselected states' surface +
+     * label colours, same pattern as [accent] — defaults keep
+     * the pinned Nocturne constants; composable callers pass
+     * [readerChromeTier] / [readerChromeMuted]. */
+    tierSurface: Color = ReaderTier2Surface,
+    mutedText: Color = ReaderMutedText
 ): ReaderChipSpec =
     when {
         selected && primary -> ReaderChipSpec(
@@ -288,15 +321,15 @@ fun readerChipSpec(
             glow = true
         )
         selected -> ReaderChipSpec(
-            containerColor = ReaderTier2Surface,
+            containerColor = tierSurface,
             borderColor = accent.copy(alpha = 0.8f),
             labelColor = Color.White,
             glow = false
         )
         else -> ReaderChipSpec(
-            containerColor = ReaderTier2Surface,
+            containerColor = tierSurface,
             borderColor = Color.White.copy(alpha = 0.06f),
-            labelColor = ReaderMutedText,
+            labelColor = mutedText,
             glow = false
         )
     }
@@ -524,7 +557,9 @@ internal fun ReaderStadiumChip(
 ) {
     val accent = readerChromeAccent()
     val chip = readerChipSpec(
-        selected = selected, primary = primary, accent = accent
+        selected = selected, primary = primary, accent = accent,
+        tierSurface = readerChromeTier(),
+        mutedText = readerChromeMuted()
     )
     FilterChip(
         selected = selected,
@@ -793,7 +828,7 @@ internal fun CustomisableReaderBarSheetContent(
                     },
                     colors = CheckboxDefaults.colors(
                         checkedColor = readerChromeAccent(),
-                        uncheckedColor = ReaderMutedText
+                        uncheckedColor = readerChromeMuted()
                     )
                 )
                 Column(Modifier.weight(1f)) {
@@ -843,8 +878,8 @@ internal fun ReaderBarSwitch(
         colors = SwitchDefaults.colors(
             checkedTrackColor = readerChromeAccent(),
             checkedThumbColor = Color.White,
-            uncheckedTrackColor = ReaderTier2Surface,
-            uncheckedThumbColor = ReaderMutedText,
+            uncheckedTrackColor = readerChromeTier(),
+            uncheckedThumbColor = readerChromeMuted(),
             uncheckedBorderColor = Color.White.copy(alpha = 0.06f)
         )
     )

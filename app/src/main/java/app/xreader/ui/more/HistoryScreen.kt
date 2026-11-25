@@ -379,17 +379,10 @@ fun HistoryScreen(
     var deleteTarget by remember {
         mutableStateOf<app.xreader.data.db.Book?>(null)
     }
-    // Delete outcomes surface as a plain toast (History has no
-    // snackbar host of its own; the Library's twin messages ride
-    // the shell's snackbar there).
-    val historyContext = LocalContext.current
-    androidx.compose.runtime.LaunchedEffect(viewModel) {
-        viewModel.messages.collect { message ->
-            android.widget.Toast.makeText(
-                historyContext, message, android.widget.Toast.LENGTH_SHORT
-            ).show()
-        }
-    }
+    // Delete outcomes ride the shell snackbar channel —
+    // collected by the History destination in MainScaffold
+    // (code 127, audit D3; the platform Toast that used to
+    // fire here in both faces is gone).
     // v1.5.2 fix (FIX-9): books-today counts history_records
     // recorded today — the same store the list reads.
     val startOfToday = LocalDate.now(ZoneId.systemDefault())

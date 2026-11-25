@@ -98,6 +98,38 @@ fun UpdatePrimaryButton(
     onOpenInstallSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    // Code 127 (audit B4): the button wears the active face —
+    // Nocturne's pill in Nocturne; in the Material 3 face a
+    // stock filled Button, the form the face's own update
+    // surfaces (RecoveryScreenM3, WhatsNewScreenM3) use for
+    // their primary actions. Until now every M3 update
+    // surface calling this shared button rendered the
+    // Nocturne pill — in UpdateCardM3, inside a ButtonGroup
+    // beside a stock FilledTonalButton.
+    if (app.xreader.ui.theme.isEditorialDesign()) {
+        val (label, action, enabled) = when (phase) {
+            UpdateDownloadPhase.None ->
+                Triple("Update now", onUpdateNow, true)
+            is UpdateDownloadPhase.Running ->
+                Triple("Downloading…", {}, false)
+            UpdateDownloadPhase.Verifying ->
+                Triple("Checking…", {}, false)
+            is UpdateDownloadPhase.Ready ->
+                Triple("Install", onInstall, true)
+            is UpdateDownloadPhase.Failed ->
+                Triple("Try again", onUpdateNow, true)
+            UpdateDownloadPhase.NeedsInstallPermission ->
+                Triple("Open settings", onOpenInstallSettings, true)
+        }
+        androidx.compose.material3.Button(
+            onClick = action,
+            modifier = modifier,
+            enabled = enabled
+        ) {
+            Text(label, maxLines = 1, softWrap = false)
+        }
+        return
+    }
     when (phase) {
         UpdateDownloadPhase.None ->
             XreaderPrimaryButton("Update now", onUpdateNow, modifier)

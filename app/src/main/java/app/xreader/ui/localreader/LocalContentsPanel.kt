@@ -245,14 +245,14 @@ internal fun TabbedContentsPanel(
                 selected = tab == 0,
                 onClick = { tab = 0 },
                 selectedContentColor = readerChromeAccent(),
-                unselectedContentColor = ReaderMutedText,
+                unselectedContentColor = readerChromeMuted(),
                 text = { Text(if (panelIsM3) "Contents" else "Chapters") }
             )
             Tab(
                 selected = tab == 1,
                 onClick = { tab = 1 },
                 selectedContentColor = readerChromeAccent(),
-                unselectedContentColor = ReaderMutedText,
+                unselectedContentColor = readerChromeMuted(),
                 text = { Text("Bookmarks") }
             )
             // Code 122 (S30): the Highlights tab — S18's
@@ -263,7 +263,7 @@ internal fun TabbedContentsPanel(
                     selected = tab == 2,
                     onClick = { tab = 2 },
                     selectedContentColor = readerChromeAccent(),
-                    unselectedContentColor = ReaderMutedText,
+                    unselectedContentColor = readerChromeMuted(),
                     text = { Text("Highlights") }
                 )
             }

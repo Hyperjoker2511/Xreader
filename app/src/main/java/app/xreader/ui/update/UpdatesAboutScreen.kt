@@ -165,7 +165,10 @@ fun UpdatesAboutScreen(
             subtitle = "Once a day, when you open the app",
             onClick = { onAutoCheckChange(!state.autoCheckEnabled) },
             trailing = {
-                Switch(
+                // Code 127 (audit F6): the kit switch on the
+                // Nocturne form (the M3 form's stock Switch
+                // further down is that face's own dress).
+                app.xreader.ui.common.NocturneSwitch(
                     checked = state.autoCheckEnabled,
                     onCheckedChange = onAutoCheckChange
                 )

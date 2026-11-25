@@ -50,12 +50,24 @@ import kotlinx.coroutines.delay
  *    process-lifetime gate, so a configuration change / rotation
  *    (new Activity, same process) never replays it, and process
  *    death (a true cold start) resets it;
- *  - dismisses as soon as the Library is ready (the caller feeds
+ *  - dismisses when the Library is ready (the caller feeds
  *    [LaunchIntro]'s `libraryReady` from LibraryViewModel's
- *    `loading` flag, threaded out of MainScaffold);
+ *    `loading` flag, threaded out of MainScaffold) — with the
+ *    code-127 refinement below;
  *  - HARD CAP: force-dismisses [LaunchIntroController.CAP_MILLIS]
  *    (1,000 ms) after it starts, even if the ready signal never
- *    arrives. There is NO artificial minimum display time;
+ *    arrives.
+ *  - CODE 127 (owner's splash-timing pick, 2026-11-25): the
+ *    ready signal is delivered to the controller only once
+ *    the mark's enter animation has COMPLETED — the branded
+ *    moment plays out in full instead of being cut mid-spring
+ *    by a fast load. This is not a fixed minimum display
+ *    time: the hold lasts exactly as long as the animation
+ *    (still under a second), the cap still bounds the whole
+ *    show, and a Library that loads slower than the
+ *    animation dismisses the intro the instant it is ready,
+ *    exactly as before. The controller's own contract is
+ *    unchanged — the composable delivers its signal later.
  *  - never shows when animations are disabled for this user —
  *    the caller passes the app's full motion decision
  *    (`rememberMotionEnabled(userEnabled = !appearance.reduceMotion)`,
@@ -216,6 +228,11 @@ fun LaunchIntro(
         animationsEnabled && !libraryReady
     var mounted by remember { mutableStateOf(eligibleAtCompose) }
     var exiting by remember { mutableStateOf(false) }
+    // Code 127: the ready signal and the enter animation's
+    // completion are latched separately; the controller hears
+    // "ready" only when BOTH have landed (see the header).
+    var readySeen by remember { mutableStateOf(false) }
+    var enterFinished by remember { mutableStateOf(false) }
 
     // Begin once per composition instance — the process gate and
     // the controller together guarantee once per cold start.
@@ -248,9 +265,15 @@ fun LaunchIntro(
         delay(FADE_MS.toLong())
         mounted = false
     }
-    // Dismiss as soon as the Library is ready — no minimum time.
+    // The Library is ready: latch it, and deliver the
+    // dismissal once the enter animation has completed too
+    // (code 127 — if the animation finished first, this
+    // dismisses immediately, as before).
     LaunchedEffect(libraryReady) {
-        if (libraryReady) controller.onLibraryReady()
+        if (libraryReady) {
+            readySeen = true
+            if (enterFinished) controller.onLibraryReady()
+        }
     }
     // Reduced motion landing mid-show drops the intro at once.
     LaunchedEffect(animationsEnabled) {
@@ -264,7 +287,12 @@ fun LaunchIntro(
         exit = fadeOut(fadeTween()),
         modifier = modifier
     ) {
-        LaunchIntroContent()
+        LaunchIntroContent(
+            onEnterAnimationFinished = {
+                enterFinished = true
+                if (readySeen) controller.onLibraryReady()
+            }
+        )
     }
 }
 
@@ -272,7 +300,9 @@ fun LaunchIntro(
 private const val CAP_POLL_MS: Long = 24L
 
 @Composable
-private fun LaunchIntroContent() {
+private fun LaunchIntroContent(
+    onEnterAnimationFinished: () -> Unit = {}
+) {
     // Flip the spring targets after the first frame so the mark
     // animates IN from its rest state instead of starting settled.
     var sprung by remember { mutableStateOf(false) }
@@ -296,6 +326,18 @@ private fun LaunchIntroContent() {
     val scaleNow = markScale
     val alphaNow = markAlpha
     val bloomNow = glowBloom
+    // Code 127: report the enter animation's completion —
+    // both springs settled exactly on their targets — once,
+    // so the dismissal can wait for the moment to play out.
+    var enterReported by remember { mutableStateOf(false) }
+    LaunchedEffect(scaleNow, bloomNow) {
+        if (!enterReported && sprung &&
+            scaleNow == 1f && bloomNow == 1f
+        ) {
+            enterReported = true
+            onEnterAnimationFinished()
+        }
+    }
     Box(
         Modifier
             .fillMaxSize()
