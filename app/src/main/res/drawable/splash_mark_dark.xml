@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Code 126 (splash): the Xreader mark in near-black for the
+  Material 3 LIGHT splash variant — the white glyph would be
+  invisible on the light surface. Same geometry as splash_mark.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="#1D1B20"
+        android:pathData="M31.1,31.4 L41.9,31.4 L77,76.6 L66,76.6 Z M66.4,31.4 L77.2,31.4 L61.6,51.5 L55.9,44.9 Z M31.1,76.6 L41.9,76.6 L52.2,63.2 L46.8,56.4 Z" />
+</vector>

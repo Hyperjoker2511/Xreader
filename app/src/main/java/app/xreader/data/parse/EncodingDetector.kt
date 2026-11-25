@@ -83,6 +83,32 @@ object EncodingDetector {
         return best ?: Charsets.UTF_8
     }
 
+    /** One scored encoding candidate (MR-6 Item 5). */
+    data class Candidate(val charset: Charset, val score: Double)
+
+    /**
+     * MR-6 Item 5: the candidate list + scores behind [detectBytes],
+     * exposed so the per-book encoding door can show why Auto picked
+     * what it picked. Every strictly-decodable candidate appears
+     * with its frequency score, best first; [detectBytes] stays the
+     * authority (it additionally prefers UTF-8 whenever UTF-8
+     * strictly decodes, and honours BOMs before any scoring). The
+     * sample stays 64 KB — wider than Moon+'s, already proven.
+     */
+    fun scoredCandidates(sample: ByteArray): List<Candidate> {
+        if (sample.isEmpty()) return listOf(Candidate(Charsets.UTF_8, 1.0))
+        val out = mutableListOf<Candidate>()
+        tryDecode(sample, Charsets.UTF_8)?.let {
+            out += Candidate(Charsets.UTF_8, scoreDecoded(it))
+        }
+        for (candidate in LEGACY_CANDIDATES) {
+            tryDecode(sample, candidate)?.let {
+                out += Candidate(candidate, scoreDecoded(it))
+            }
+        }
+        return out.sortedByDescending { it.score }
+    }
+
     /** Strict decode; null when the bytes are not valid in [charset].
      * A truncated multi-byte char at the very end of the sample is
      * tolerated (the sample is a prefix, not the whole file). */

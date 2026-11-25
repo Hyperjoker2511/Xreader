@@ -56,3 +56,8 @@ official packages (`hct`, `scheme`, `dynamiccolor`, `palettes`,
 Maven artifact. It generates the picked-colour schemes and
 the book page's cover-derived scheme, and extracts cover
 seed colours (Celebi quantisation + Score).
+
+## OpenCC
+Copyright 2013-present Carbo Kuo (BYVoid) and contributors (Apache License, Version 2.0 — the full text ships beside this file as `APACHE-2.0.txt`).
+https://github.com/BYVoid/OpenCC
+Simplified↔Traditional character conversion data (MR-6, code 126): the bundled `assets/opencc/st_characters.txt` is converted from OpenCC's `STCharacters` dictionary (first listed value per character, single-BMP-character pairs only, so conversion never changes a string's length); `assets/opencc/ts_characters.txt` is derived from it by first-value inversion. OpenCC's phrase tables are not used. Data retrieved from the OpenCC master branch on 2026-11-25.

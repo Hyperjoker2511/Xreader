@@ -175,6 +175,10 @@ fun EditorialBookDetail(
     var chapterSettingsOpen by remember { mutableStateOf(false) }
     val engineLabel by viewModel.engineLabel
         .collectAsStateWithLifecycle()
+    // MR-6 Item 5: the per-book encoding door's state (the same
+    // shared section the Nocturne page renders — parity).
+    val encodingDoor by viewModel.encodingDoor
+        .collectAsStateWithLifecycle()
     val clipboard = androidx.compose.ui.platform
         .LocalClipboardManager.current
     // Phase 6 (shared with the Nocturne page): highlights →
@@ -712,6 +716,17 @@ fun EditorialBookDetail(
                             }
                         }
                     }
+                }
+            }
+
+            // ── MR-6 Item 5: the encoding door (local TXT) ─────
+            if (encodingDoor.visible) {
+                item(key = "encoding-door") {
+                    EncodingDoorSection(
+                        door = encodingDoor,
+                        onPick = { viewModel.setBookEncoding(it) },
+                        onDismissNote = { viewModel.clearEncodingNote() }
+                    )
                 }
             }
 

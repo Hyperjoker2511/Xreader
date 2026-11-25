@@ -30,8 +30,21 @@ class BookImporterTest {
         val books = FakeBookDao()
         val chapters = FakeChapterDao()
         val importer = importer(storage, books, chapters)
-        val text = "Chapter 1\n\nThe story begins in a quiet village.\n\n" +
-            "Chapter 2\n\nIt ends beyond the mountains.\n"
+        // MR-6: three chapters at real scale — Moon+'s detector
+        // discards candidate lists shorter than three and drops
+        // headings whose chapters start under 100 chars apart,
+        // so the old two-toy-chapter fixture no longer exercises
+        // the import. The claims (TXT lands with its chapters
+        // READY and readable content) are unchanged.
+        val text = "Chapter 1\n\nThe story begins in a quiet village " +
+            "where the hero was born and raised, and where every lane " +
+            "and rooftop was known to him by heart since childhood.\n\n" +
+            "Chapter 2\n\nThe road carried him far beyond the " +
+            "mountains, through rivers and pine forests, until the " +
+            "village behind him was only a memory and a promise.\n\n" +
+            "Chapter 3\n\nIt ends beyond the mountains, in a town he " +
+            "had never seen, where the next part of his story was " +
+            "waiting to begin under a wide and unfamiliar sky.\n"
         val candidate = when (val r = importer.stage("my-novel.txt") { text.byteInputStream() }) {
             is AppResult.Ok -> r.value
             is AppResult.Err -> throw AssertionError("stage failed: ${r.error}")
@@ -44,9 +57,9 @@ class BookImporterTest {
             is AppResult.Err -> throw AssertionError("import failed: ${r.error}")
         }
         assertEquals("my-novel", book.title)
-        assertEquals(2, book.totalChapters)
+        assertEquals(3, book.totalChapters)
         val rows = chapters.forBook(book.id)
-        assertEquals(2, rows.size)
+        assertEquals(3, rows.size)
         assertTrue(rows.all { it.downloadState == DownloadState.READY })
         val content = storage.readChapterContent(book.id, rows[0].id)
         assertTrue(content is AppResult.Ok)

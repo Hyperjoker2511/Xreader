@@ -172,6 +172,14 @@ class BookImporter(
      * always wires it. */
     private val localReaderPrefs:
         app.xreader.ui.localreader.LocalReaderPrefs? = null,
+    /** MR-6 (Item 5): after a TXT import lands and its source is
+     * retained (the book's filePath set), the importer reports
+     * the charset the parse used, keyed by that filePath — the
+     * per-book encoding record's writer. Nullable like the other
+     * optional stores; production (AppContainer) wires it to
+     * TxtPrefs. */
+    private val onTxtEncodingDetected:
+        ((filePath: String, charsetName: String) -> Unit)? = null,
     /** v1.5.5 (§4): the completion jobs' scope — importer-owned
      * and supervisor-rooted, so a job outlives whichever screen
      * started the import. AppContainer's importer is a
@@ -491,6 +499,31 @@ class BookImporter(
                     if (copied) {
                         book = book.copy(coverPath = storage.coverRelative(bookId, ext))
                         bookDao.update(book)
+                    }
+                }
+            }
+            // MR-6 (Items 5/7): a TXT book keeps its source —
+            // the retained copy EPUB/PDF books have always had
+            // (bookFileRelative + filePath) — so the per-book
+            // encoding door and chapter re-detection can re-read
+            // it. Best-effort: the chapters have landed either
+            // way; a failed copy leaves filePath null and the
+            // doors say so plainly. The detected charset is
+            // recorded against the landed path here because at
+            // parse time the book had no path yet.
+            if (format == BookFormat.TXT) {
+                runCatching {
+                    val sourceRelative =
+                        storage.bookFileRelative(book.id, "book.txt")
+                    val dest = storage.resolve(sourceRelative)
+                    dest.parentFile?.mkdirs()
+                    staged.copyTo(dest, overwrite = true)
+                    book = book.copy(filePath = sourceRelative)
+                    bookDao.update(book)
+                    parsed.detectedEncoding?.let { charsetName ->
+                        onTxtEncodingDetected?.invoke(
+                            sourceRelative, charsetName
+                        )
                     }
                 }
             }

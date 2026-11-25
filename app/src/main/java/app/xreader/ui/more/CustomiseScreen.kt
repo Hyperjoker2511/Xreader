@@ -86,6 +86,7 @@ import app.xreader.data.library.LibraryState
 import app.xreader.data.library.NavBarStyle
 import app.xreader.data.library.StartScreen
 import app.xreader.data.library.TabLabelStyle
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
@@ -163,7 +164,13 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
          * door's page + the Material 3 knobs). A separate prefs
          * owner — Nocturne's fields above never read it. */
         val design: app.xreader.data.prefs.DesignState =
-            app.xreader.data.prefs.DesignState()
+            app.xreader.data.prefs.DesignState(),
+        /** MR-6: the TXT flagship settings (regex mode switch +
+         * per-language rules, encoding records, script mode,
+         * trims) — the Reader page's TXT section reads/writes
+         * these through TxtPrefs. */
+        val txt: app.xreader.data.prefs.TxtPrefs.State =
+            app.xreader.data.prefs.TxtPrefs.State()
     )
 
     /** FIX-18: the Komikku manga reader's GLOBAL defaults,
@@ -182,7 +189,8 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         container.sourcePrefs.keiyoushiPlayerEnabled,
         container.sourcePrefs.dohEnabled,
         container.readerPrefs.cbzOpensInKomikku,
-        container.designPrefs.state
+        container.designPrefs.state,
+        container.txtPrefs.state
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         UiState(
@@ -199,7 +207,8 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
             keiyoushiPlayerEnabled = values[7] as Boolean,
             dohEnabled = values[8] as Boolean,
             cbzOpensInKomikku = values[9] as Boolean,
-            design = values[10] as app.xreader.data.prefs.DesignState
+            design = values[10] as app.xreader.data.prefs.DesignState,
+            txt = values[11] as app.xreader.data.prefs.TxtPrefs.State
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), UiState())
 
@@ -559,6 +568,27 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             container.readerPrefs.setCbzOpensInKomikku(value)
         }
+    }
+
+    // ── MR-6: TXT chapter detection settings ────────────────────
+
+    fun setTxtTocRegMode(value: Boolean) {
+        viewModelScope.launch { container.txtPrefs.setTocRegMode(value) }
+    }
+
+    fun setTxtRegexOverride(
+        language: app.xreader.data.prefs.TxtLanguage,
+        rule: String?
+    ) {
+        viewModelScope.launch { container.txtPrefs.setRegexOverride(language, rule) }
+    }
+
+    fun setTxtMaxTitleLength(value: Int) {
+        viewModelScope.launch { container.txtPrefs.setMaxTitleLength(value) }
+    }
+
+    fun setTxtTitleBlacklist(value: String) {
+        viewModelScope.launch { container.txtPrefs.setTitleBlacklist(value) }
     }
 
     // ── v1.0.4 (D10/D13): the download switches, moved here from
@@ -2308,6 +2338,89 @@ fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
                     }
                 }
             )
+            // MR-6 (Items 1 + 4): the TXT chapter-detection
+            // doors — the mode switch and the per-language
+            // title rules. Moon+'s shape: rules are an
+            // alternative to the shape-reading detectors,
+            // never a vote between them.
+            Text("TXT chapters", style = MaterialTheme.typography.bodyLarge)
+            Text(
+                "How plain-text (.txt) books find their chapters. " +
+                    "Changes apply the next time a TXT book is " +
+                    "imported, or when you re-detect chapters from " +
+                    "a book's Contents.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            CustomiseSwitch(
+                label = "Use chapter title rules",
+                description = "On: only the title rules below " +
+                    "decide the chapters. Off: the app reads the " +
+                    "book's shape instead — short heading lines, " +
+                    "numbered 第…章 lines and quoted titles.",
+                checked = state.txt.tocRegMode,
+                onChange = { viewModel.setTxtTocRegMode(it) }
+            )
+            TxtRuleField(
+                label = "English title rule",
+                stored = state.txt.regexOverrides[
+                    app.xreader.data.prefs.TxtLanguage.EN
+                ],
+                builtIn = app.xreader.data.parse.TxtChapterRegex.DEFAULT_EN,
+                onSave = { rule ->
+                    viewModel.setTxtRegexOverride(
+                        app.xreader.data.prefs.TxtLanguage.EN, rule
+                    )
+                }
+            )
+            TxtRuleField(
+                label = "Chinese / Japanese title rule",
+                stored = state.txt.regexOverrides[
+                    app.xreader.data.prefs.TxtLanguage.CN
+                ],
+                builtIn = app.xreader.data.parse.TxtChapterRegex.DEFAULT_CN,
+                onSave = { rule ->
+                    viewModel.setTxtRegexOverride(
+                        app.xreader.data.prefs.TxtLanguage.CN, rule
+                    )
+                }
+            )
+            TxtRuleField(
+                label = "Russian title rule",
+                stored = state.txt.regexOverrides[
+                    app.xreader.data.prefs.TxtLanguage.RU
+                ],
+                builtIn = app.xreader.data.parse.TxtChapterRegex.DEFAULT_RU,
+                onSave = { rule ->
+                    viewModel.setTxtRegexOverride(
+                        app.xreader.data.prefs.TxtLanguage.RU, rule
+                    )
+                }
+            )
+            TxtRuleField(
+                label = "Longest chapter title (characters)",
+                stored = state.txt.maxTitleLength.toString(),
+                builtIn = app.xreader.data.prefs.TxtPrefs
+                    .DEFAULT_MAX_TITLE_LENGTH.toString(),
+                onSave = { value ->
+                    viewModel.setTxtMaxTitleLength(
+                        value?.toIntOrNull()
+                            ?: app.xreader.data.prefs.TxtPrefs
+                                .DEFAULT_MAX_TITLE_LENGTH
+                    )
+                }
+            )
+            TxtRuleField(
+                label = "Titles never end with these characters",
+                stored = state.txt.titleBlacklist,
+                builtIn = app.xreader.data.prefs.TxtPrefs.DEFAULT_TITLE_BLACKLIST,
+                onSave = { value ->
+                    viewModel.setTxtTitleBlacklist(
+                        value ?: app.xreader.data.prefs.TxtPrefs
+                            .DEFAULT_TITLE_BLACKLIST
+                    )
+                }
+            )
             Text("Manga tap zones", style = MaterialTheme.typography.bodyLarge)
             androidx.compose.foundation.layout.FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -3519,6 +3632,57 @@ private fun navIndicatorStyleName(
     app.xreader.data.library.NavIndicatorStyle.FLASHY -> "Flashy"
     app.xreader.data.library.NavIndicatorStyle.PLAIN -> "Plain"
     app.xreader.data.library.NavIndicatorStyle.WAVE -> "Wave"
+}
+
+/**
+ * MR-6 Item 1: one editable TXT rule row — the stored override (or
+ * the built-in when none), a Save that writes only on a change,
+ * and a Reset back to the built-in. A bad rule never breaks an
+ * import: the parser falls back to the built-in (the spec's
+ * fail-closed rule), and the field says so.
+ */
+@Composable
+private fun TxtRuleField(
+    label: String,
+    stored: String?,
+    builtIn: String,
+    onSave: (String?) -> Unit
+) {
+    val effective = stored ?: builtIn
+    var draft by remember(label, effective) { mutableStateOf(effective) }
+    Column {
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = false,
+            maxLines = 3
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = { onSave(draft) },
+                enabled = draft != effective
+            ) {
+                Text("Save")
+            }
+            TextButton(
+                onClick = { onSave(null) },
+                enabled = stored != null
+            ) {
+                Text("Use built-in rule")
+            }
+        }
+        if (stored == null) {
+            Text(
+                "Using the built-in rule. If a saved rule can't " +
+                    "be read, the built-in is used instead — an " +
+                    "import never fails over a rule.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
 }
 
 @Composable

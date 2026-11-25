@@ -5,6 +5,7 @@ import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -132,5 +133,23 @@ class EncodingDetectorTest {
     @Test fun asciiIsUtf8() {
         val bytes = "Chapter 1. A plain English opening line of prose.".toByteArray()
         assertEquals(Charsets.UTF_8, EncodingDetector.detectBytes(bytes))
+    }
+
+    // ── MR-6 Item 5: the exposed candidate list + scores ───────
+
+    @Test fun gbkCandidatesRankGbkFirst() {
+        val text = "第一章 开始的故事 这是一个中文小说的开头内容讲述了主角的冒险旅程"
+        val bytes = text.toByteArray(charset("GBK"))
+        val candidates = EncodingDetector.scoredCandidates(bytes)
+        assertTrue(candidates.isNotEmpty())
+        assertEquals("GBK", candidates.first().charset.name())
+    }
+
+    @Test fun big5CandidatesRankBig5First() {
+        val text = "第一章 開始的故事 這是一個中文小說的開頭內容講述了主角的冒險旅程"
+        val bytes = text.toByteArray(charset("Big5"))
+        val candidates = EncodingDetector.scoredCandidates(bytes)
+        assertTrue(candidates.isNotEmpty())
+        assertEquals("Big5", candidates.first().charset.name())
     }
 }

@@ -180,7 +180,21 @@ fun ReaderSettingsSheet(
      * a change inside the reader is per-book); the global
      * default lives in Settings → Customise. */
     footnotesInText: Boolean? = null,
-    onFootnotesInTextChange: (Boolean) -> Unit = {}
+    onFootnotesInTextChange: (Boolean) -> Unit = {},
+    /** MR-6 (Items 8/9): the display-time text transforms —
+     * the Simplified↔Traditional render mode (every text
+     * format) and, for TXT books only ([showTxtTrims]), the
+     * two trim switches. All three are global settings; the
+     * screen wires them to TxtPrefs, and a change re-derives
+     * the open book's display copies immediately. */
+    scriptMode: app.xreader.data.prefs.ScriptMode =
+        app.xreader.data.prefs.ScriptMode.OFF,
+    onScriptModeChange: (app.xreader.data.prefs.ScriptMode) -> Unit = {},
+    showTxtTrims: Boolean = false,
+    trimBlankLines: Boolean = false,
+    onTrimBlankLinesChange: (Boolean) -> Unit = {},
+    trimPageTopBlanks: Boolean = false,
+    onTrimPageTopBlanksChange: (Boolean) -> Unit = {}
 ) {
     // v1.0.6.2 (F8c): the sheet is a short INDEX of plainly-named
     // groups now — not one long scroll. Each group is its own
@@ -1120,6 +1134,49 @@ fun ReaderSettingsSheet(
                         checked = config.disableZoomOut,
                         onChange = { v -> onUpdate { it.copy(disableZoomOut = v) } }
                     )
+                }
+
+                // MR-6 (Items 8/9): display-time text display —
+                // the Simplified↔Traditional render toggle and
+                // the TXT trim switches. Display only: the book's
+                // stored text never changes.
+                SheetSection("Text display") {
+                    Text(
+                        "Chinese script",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        listOf(
+                            app.xreader.data.prefs.ScriptMode.OFF to "As written",
+                            app.xreader.data.prefs.ScriptMode.TO_TRADITIONAL to
+                                "Traditional",
+                            app.xreader.data.prefs.ScriptMode.TO_SIMPLIFIED to
+                                "Simplified"
+                        ).forEach { (value, label) ->
+                            NocturneChip(
+                                label = label,
+                                selected = scriptMode == value,
+                                onClick = { onScriptModeChange(value) },
+                                modifier = Modifier,
+                                dotColor = null,
+                            )
+                        }
+                    }
+                    if (showTxtTrims) {
+                        SheetSwitch(
+                            label = "Trim blank lines and spaces (TXT)",
+                            checked = trimBlankLines,
+                            onChange = onTrimBlankLinesChange
+                        )
+                        SheetSwitch(
+                            label = "Trim blank lines at the top of the page (TXT)",
+                            checked = trimPageTopBlanks,
+                            onChange = onTrimPageTopBlanksChange
+                        )
+                    }
                 }
             }
 
@@ -2207,7 +2264,17 @@ fun TocSheet(
      * Null (the default) = the host supplied none and no line
      * is drawn. HOST WIRING: ReaderScreen's TocSheet call must
      * pass state.chapterFraction here. */
-    currentChapterProgress: Float? = null
+    currentChapterProgress: Float? = null,
+    /** MR-6 Item 7: the "Re-detect chapters" door (Moon+'s
+     * PrefChapters in kind). Non-null only for local TXT books —
+     * the host passes it only there, so no other format grows
+     * the door. [redetectAvailable] is the file-gone rule: false
+     * disables the door and shows the plain words instead. */
+    onRedetectChapters: (() -> Unit)? = null,
+    redetectAvailable: Boolean = false,
+    redetectBusy: Boolean = false,
+    redetectNote: String? = null,
+    onDismissRedetectNote: () -> Unit = {}
 ) {
     // Code 120 (§2.11 Reader): in the Material 3 design the
     // sheet opens on the design's Contents-tab knob; Nocturne
@@ -2290,6 +2357,60 @@ fun TocSheet(
         }
         when (tab) {
             0 -> Column {
+                // MR-6 Item 10: the Contents counter line —
+                // Moon+'s `(lastChapter + 1) / chapters.size()`,
+                // added for all text formats (the reader chrome
+                // already had a counter; the sheet itself did
+                // not). Counts the rows shown: the book's own
+                // TOC entries when it has them, else chapters.
+                val counterCurrent = if (tocEntries.isNotEmpty()) {
+                    (currentTocEntryIndex + 1).coerceAtLeast(1)
+                } else {
+                    currentChapterIndex + 1
+                }
+                Text(
+                    text = "($counterCurrent / $contentsRowCount)",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 4.dp)
+                )
+                // MR-6 Item 7: the re-detect door (TXT only —
+                // the host passes the callback only there).
+                if (onRedetectChapters != null) {
+                    if (redetectNote != null) {
+                        Text(
+                            text = redetectNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onDismissRedetectNote() }
+                                .padding(vertical = 4.dp)
+                        )
+                    }
+                    TextButton(
+                        onClick = onRedetectChapters,
+                        enabled = redetectAvailable && !redetectBusy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            if (redetectBusy) {
+                                "Re-detecting chapters…"
+                            } else {
+                                "Re-detect chapters"
+                            }
+                        )
+                    }
+                    if (!redetectAvailable) {
+                        Text(
+                            text = "Source file unavailable — " +
+                                "re-import to re-detect chapters.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                    }
+                }
                 if (contentsGrouped) {
                     ChapterRangeBar(
                         totalCount = contentsRowCount,

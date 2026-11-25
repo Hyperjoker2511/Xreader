@@ -274,6 +274,20 @@ data class ReaderUiState(
      * prepared ones, and the chapter-end wall's FOR_EPUB
      * scope reads this flag through that surface). */
     val isEpubBook: Boolean = false,
+    /** MR-6: the open book is a local TXT — gates the TXT-only
+     * render trims (Item 9) and the Contents re-detect door
+     * (Item 7). */
+    val isTxtBook: Boolean = false,
+    /** MR-6 Item 7: the re-detect door can work — a local TXT
+     * whose source file is still there. False shows the door
+     * disabled with the file-gone words. */
+    val redetectAvailable: Boolean = false,
+    /** MR-6 Item 7: a re-detection is running. */
+    val redetectBusy: Boolean = false,
+    /** MR-6 Item 7: the confirmation line after a re-detection
+     * ("Chapters re-detected: 24 → 31. Place kept. …"), shown in
+     * the Contents sheet until dismissed. */
+    val redetectNote: String? = null,
     /** The resident run's chapter ids (Item 7) — the UI-side
      * layout worker evicts a segment's records when its id
      * leaves this set (Item 2, A4). */
@@ -1040,6 +1054,15 @@ class ReaderViewModel(
      * already earned its one re-resolution this session. */
     private val extractionRetriedFor = mutableSetOf<Long>()
 
+    // ── MR-6: display-time TXT transforms (Items 8/9) ───────────
+    /** The live TXT settings the display derivation reads —
+     * kept current by the txtPrefs collector in init. */
+    private var txtDisplaySettings: app.xreader.data.prefs.TxtPrefs.State =
+        container.txtPrefs.snapshot
+
+    /** True while the open book is a local TXT (set at open). */
+    private var isTxtBookNow: Boolean = false
+
     // ── P0 (Reader Terms): display-time replacements ────────────
     // The caches above always hold the ORIGINAL text (storage
     // bytes, untouched). What lands in the UI state is a display
@@ -1169,6 +1192,22 @@ class ReaderViewModel(
                 activeTerms = pairs
                 termsMaps.clear()
                 reapplyTerms()
+            }
+        }
+        // MR-6 (Items 8/9): the Simplified↔Traditional mode and
+        // the TXT trim switches are display-time settings — a
+        // change re-derives every resident display copy from its
+        // held original through the same reapply path terms use,
+        // so an already-open book responds immediately, exactly
+        // as Moon+ restarts its reader on a trim change.
+        viewModelScope.launch {
+            container.txtPrefs.state.collectLatest { settings ->
+                val displayChanged =
+                    settings.scriptMode != txtDisplaySettings.scriptMode ||
+                        settings.trimBlankLines != txtDisplaySettings.trimBlankLines ||
+                        settings.trimPageTopBlanks != txtDisplaySettings.trimPageTopBlanks
+                txtDisplaySettings = settings
+                if (displayChanged) reapplyTerms()
             }
         }
         viewModelScope.launch {
@@ -1356,6 +1395,17 @@ class ReaderViewModel(
                 book.sourceType ==
                     app.xreader.data.db.SourceType.LOCAL_FILE &&
                 book.localFormat == app.xreader.data.db.BookFormat.EPUB
+            // MR-6: TXT-ness for the Item 9 trims + the Item 7
+            // re-detect door (available only while the source
+            // file is still there — the file-gone rule).
+            val txtBook = book != null &&
+                book.sourceType ==
+                    app.xreader.data.db.SourceType.LOCAL_FILE &&
+                book.localFormat == app.xreader.data.db.BookFormat.TXT
+            isTxtBookNow = txtBook
+            val txtFilePath = if (txtBook) book?.filePath else null
+            val redetectOk = txtFilePath != null &&
+                container.bookStorage.resolve(txtFilePath).isFile
             // v1.0.6 (W3.4): a browser-view source gets ONE plain
             // note per source per session, so slower chapter turns
             // never read as the app hanging.
@@ -1381,6 +1431,8 @@ class ReaderViewModel(
                 tocEntries = emptyList(),
                 chapterLevels = chapterLevels,
                 isEpubBook = epubBook,
+                isTxtBook = txtBook,
+                redetectAvailable = redetectOk,
                 pageTurnTier = computeTier(_config.value),
                 browserViewNotice = sourceNotice ?: _state.value.browserViewNotice
             )
@@ -1608,6 +1660,124 @@ class ReaderViewModel(
         }
         if (index == _state.value.chapterIndex && _state.value.chapterText != null) return
         launchLoad { loadChapter(index, 0, 0f) }
+    }
+
+    /**
+     * MR-6 Item 7: the Contents sheet's "Re-detect chapters"
+     * door. Flushes the live place first (the service migrates
+     * the stored row), re-runs detection over the source file,
+     * then reloads the chapter list and lands back at the
+     * migrated place. The confirmation counts ride
+     * [ReaderUiState.redetectNote].
+     */
+    fun redetectChapters() {
+        if (_state.value.redetectBusy || !_state.value.redetectAvailable) return
+        _state.value = _state.value.copy(redetectBusy = true, redetectNote = null)
+        viewModelScope.launch {
+            flushProgressNow()
+            val book = container.database.bookDao().getById(bookId)
+            val result = if (book == null) {
+                null
+            } else {
+                container.txtChapterRedetect.redetect(
+                    book,
+                    app.xreader.data.parse.TxtChapterRedetect.Mode.REDETECT
+                )
+            }
+            when (result) {
+                is app.xreader.data.parse.TxtChapterRedetect.Result.Done -> {
+                    val outcome = result.outcome
+                    val chapters = container.database.chapterDao().forBook(bookId)
+                    val saved = container.database.readingProgressDao()
+                        .getForBook(bookId)
+                    val index = (saved?.chapterIndex ?: 0)
+                        .coerceIn(0, maxOf(0, chapters.lastIndex))
+                    // Chapter ids all changed: every id-keyed
+                    // cache is stale by construction.
+                    segmentOriginals.clear()
+                    segmentDisplay.clear()
+                    chapterCache.clear()
+                    termsMaps.clear()
+                    val movedParts = mutableListOf<String>()
+                    if (outcome.bookmarksMoved > 0) {
+                        val word = if (outcome.bookmarksMoved == 1) {
+                            "bookmark"
+                        } else {
+                            "bookmarks"
+                        }
+                        movedParts += "${outcome.bookmarksMoved} $word " +
+                            "moved to the nearest chapter."
+                    }
+                    if (outcome.highlightsMoved > 0) {
+                        val word = if (outcome.highlightsMoved == 1) {
+                            "highlight"
+                        } else {
+                            "highlights"
+                        }
+                        movedParts += "${outcome.highlightsMoved} $word " +
+                            "moved to the nearest chapter."
+                    }
+                    val note = buildString {
+                        append(
+                            "Chapters re-detected: ${outcome.oldCount}" +
+                                " → ${outcome.newCount}."
+                        )
+                        append(
+                            when {
+                                !outcome.placeKept ->
+                                    " Place restarted at the first chapter."
+                                outcome.oldCount == outcome.newCount ->
+                                    " Place kept."
+                                else ->
+                                    // The offset was carried over by
+                                    // position; the sentence it lands
+                                    // on can shift when the chapter
+                                    // boundaries moved — say exactly
+                                    // that, no more (code-126 re-check).
+                                    " Place carried over by position."
+                            }
+                        )
+                        for (part in movedParts) {
+                            append(" ")
+                            append(part)
+                        }
+                    }
+                    _state.value = _state.value.copy(
+                        chapters = chaptersUpdated(chapters),
+                        redetectBusy = false,
+                        redetectNote = note
+                    )
+                    loadChapter(index, saved?.charOffset ?: 0, saved?.scrollFraction ?: 0f)
+                    if (_config.value.mode == ReaderMode.SCROLL) {
+                        planResidency(index)
+                    }
+                }
+                is app.xreader.data.parse.TxtChapterRedetect.Result.SourceUnavailable -> {
+                    _state.value = _state.value.copy(
+                        redetectBusy = false,
+                        redetectAvailable = false,
+                        redetectNote = "Source file unavailable — " +
+                            "re-import to re-detect chapters."
+                    )
+                }
+                is app.xreader.data.parse.TxtChapterRedetect.Result.Failed -> {
+                    _state.value = _state.value.copy(
+                        redetectBusy = false,
+                        redetectNote = "Re-detection didn't finish — ${result.reason}"
+                    )
+                }
+                null -> {
+                    _state.value = _state.value.copy(redetectBusy = false)
+                }
+            }
+        }
+    }
+
+    /** MR-6 Item 7: dismiss the re-detect confirmation line. */
+    fun clearRedetectNote() {
+        if (_state.value.redetectNote != null) {
+            _state.value = _state.value.copy(redetectNote = null)
+        }
     }
 
     /** Item 3, row 2: a jump to a place inside a chapter
@@ -1885,14 +2055,37 @@ class ReaderViewModel(
      * remapped onto the displayed page.
      */
     private fun displayText(original: ChapterText, chapterId: Long): ChapterText {
+        // MR-6 (Items 8/9): the display-time transforms run on
+        // the ORIGINAL first — Simplified↔Traditional conversion
+        // (every text format; length-preserving, so offsets never
+        // move) and the TXT trim switches (TXT books only). Both
+        // are render-level: the stored text and the held originals
+        // never change, and the voice keeps speaking originals.
+        var base = original
+        val settings = txtDisplaySettings
+        if (settings.scriptMode != app.xreader.data.prefs.ScriptMode.OFF) {
+            val converted = app.xreader.data.parse.SimplifiedTraditional
+                .applyToContent(
+                    original.content, settings.scriptMode, container.scriptTables
+                )
+            if (converted !== original.content) base = ChapterText(converted)
+        }
+        if (isTxtBookNow &&
+            (settings.trimBlankLines || settings.trimPageTopBlanks)
+        ) {
+            val trimmed = app.xreader.data.parse.TxtDisplayTransform.applyTrims(
+                base.content, settings.trimBlankLines, settings.trimPageTopBlanks
+            )
+            if (trimmed !== base.content) base = ChapterText(trimmed)
+        }
         if (activeTerms.isEmpty()) {
             termsMaps.remove(chapterId)
-            return original
+            return base
         }
-        val result = TermReplacer.applyToContent(original.content, activeTerms)
+        val result = TermReplacer.applyToContent(base.content, activeTerms)
         if (result.offsetMap.isEmpty) {
             termsMaps.remove(chapterId)
-            return original
+            return base
         }
         termsMaps[chapterId] = result.offsetMap
         return ChapterText(result.content)

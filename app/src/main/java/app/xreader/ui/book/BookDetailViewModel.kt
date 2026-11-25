@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onCompletion
@@ -492,12 +493,162 @@ internal class BookDuplicatesPipeline(
  * Download actions, synopsis, and the chapter list with per-chapter
  * state. The basic reader opens from here.
  */
+/** MR-6 Item 5: the per-book encoding door's state (local TXT
+ * books only). [current] is the saved override's charset name —
+ * null means Auto; [detected] is the charset Auto last picked,
+ * recorded at parse time. */
+data class EncodingDoorState(
+    val visible: Boolean = false,
+    val available: Boolean = false,
+    val current: String? = null,
+    val detected: String? = null,
+    val busy: Boolean = false,
+    val note: String? = null,
+    /** The detector's runner-up candidates with their scores
+     * ("GBK · 1234") — why Auto picked what it picked (Item 5). */
+    val alsoPossible: List<String> = emptyList()
+)
+
 class BookDetailViewModel(
     private val container: AppContainer,
     private val bookId: Long
 ) : ViewModel() {
 
     private val storyLocal = kotlinx.coroutines.flow.MutableStateFlow(BookDetailUiState())
+
+    // ── MR-6 Item 5: per-book encoding door ─────────────────────
+    private val encodingBusy =
+        kotlinx.coroutines.flow.MutableStateFlow(false)
+    private val encodingNote =
+        kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+
+    /** Item 5: the detector's scored candidates for this book's
+     * retained source (64 KB sample, off the main thread) — the
+     * door shows the runners-up so Auto's pick is explainable. */
+    private val encodingCandidates:
+        StateFlow<List<app.xreader.data.parse.EncodingDetector.Candidate>> =
+        container.database.bookDao().observeById(bookId)
+            .map { it?.filePath }
+            .distinctUntilChanged()
+            .map { path ->
+                if (path == null) {
+                    emptyList()
+                } else {
+                    runCatching {
+                        val file = container.bookStorage.resolve(path)
+                        if (!file.isFile) {
+                            emptyList()
+                        } else {
+                            file.inputStream().use { input ->
+                                // Fill the sample properly — a
+                                // single read() may return short.
+                                val buffer = ByteArray(64 * 1024)
+                                var filled = 0
+                                while (filled < buffer.size) {
+                                    val read = input.read(
+                                        buffer, filled, buffer.size - filled
+                                    )
+                                    if (read < 0) break
+                                    filled += read
+                                }
+                                app.xreader.data.parse.EncodingDetector
+                                    .scoredCandidates(buffer.copyOf(filled))
+                            }
+                        }
+                    }.getOrDefault(emptyList())
+                }
+            }
+            .flowOn(kotlinx.coroutines.Dispatchers.IO)
+            .stateIn(
+                viewModelScope, SharingStarted.WhileSubscribed(5_000),
+                emptyList()
+            )
+
+    val encodingDoor: StateFlow<EncodingDoorState> = combine(
+        container.database.bookDao().observeById(bookId),
+        container.txtPrefs.state,
+        encodingBusy,
+        encodingNote,
+        encodingCandidates
+    ) { book, txt, busy, note, candidates ->
+        val isTxt = book != null &&
+            book.sourceType == app.xreader.data.db.SourceType.LOCAL_FILE &&
+            book.localFormat == app.xreader.data.db.BookFormat.TXT
+        val path = if (isTxt) book?.filePath else null
+        EncodingDoorState(
+            visible = isTxt,
+            available = path != null &&
+                container.bookStorage.resolve(path).isFile,
+            current = path?.let { txt.encodingOverrideFor(it) },
+            detected = path?.let { txt.detectedEncodingFor(it) },
+            busy = busy,
+            note = note,
+            // Runners-up = every scored candidate except the one
+            // Auto actually picked (the detector's pick can lead
+            // or trail the raw score order — BOM and strict-UTF-8
+            // preference — so filter by name, never by position).
+            alsoPossible = candidates
+                .filter {
+                    it.charset.name() !=
+                        (path?.let { p -> txt.encodingOverrideFor(p) }
+                            ?: path?.let { p -> txt.detectedEncodingFor(p) })
+                }
+                .take(3)
+                .map { "${it.charset.name()} · ${it.score}" }
+        )
+    }.stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000),
+        EncodingDoorState()
+    )
+
+    /**
+     * MR-6 Item 5: pick this book's encoding (null = Auto). The
+     * choice is stored against the book's file path, then the
+     * book is re-decoded + re-detected in place (Item 7's path,
+     * REDECODE migration: place restarts at chapter 1, marks are
+     * kept by chapter index with clamped offsets — the note
+     * says so in plain words).
+     */
+    fun setBookEncoding(charsetName: String?) {
+        if (encodingBusy.value) return
+        viewModelScope.launch {
+            val book = container.database.bookDao().getById(bookId)
+                ?: return@launch
+            val path = book.filePath ?: return@launch
+            encodingBusy.value = true
+            encodingNote.value = null
+            container.txtPrefs.setEncodingOverride(path, charsetName)
+            // The parser reads the TxtPrefs snapshot; wait until
+            // the new choice has landed in it before re-decoding.
+            kotlinx.coroutines.withTimeoutOrNull(2_000) {
+                container.txtPrefs.state.first {
+                    it.encodingOverrideFor(path) == charsetName
+                }
+            }
+            val result = container.txtChapterRedetect.redetect(
+                book,
+                app.xreader.data.parse.TxtChapterRedetect.Mode.REDECODE
+            )
+            encodingBusy.value = false
+            encodingNote.value = when (result) {
+                is app.xreader.data.parse.TxtChapterRedetect.Result.Done ->
+                    "Encoding changed. Reading restarts at the " +
+                        "first chapter; bookmarks and highlights " +
+                        "were kept, though their positions are " +
+                        "approximate."
+                is app.xreader.data.parse.TxtChapterRedetect.Result
+                    .SourceUnavailable ->
+                    "Source file unavailable — re-import to " +
+                        "change encoding."
+                is app.xreader.data.parse.TxtChapterRedetect.Result.Failed ->
+                    "The encoding couldn't be changed — ${result.reason}"
+            }
+        }
+    }
+
+    fun clearEncodingNote() {
+        encodingNote.value = null
+    }
 
     /** v1.7 Patch 3: the local reader's prefs — the prepare
      * record's store, read for the prepared checks below. */

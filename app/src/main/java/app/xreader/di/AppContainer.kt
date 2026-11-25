@@ -200,6 +200,21 @@ class AppContainer(
     val readerPrefs: app.xreader.data.prefs.ReaderPrefs =
         app.xreader.data.prefs.ReaderPrefs(appContext.settingsDataStore)
 
+    /** MR-6: the TXT flagship settings store (regex overrides +
+     * mode switch, per-file encodings, Simplified↔Traditional
+     * mode, trim switches). Its synchronous snapshot is kept
+     * current by a collector started in the init block below
+     * [appScope]'s declaration; the parser path reads the
+     * snapshot, never the DataStore. */
+    val txtPrefs: app.xreader.data.prefs.TxtPrefs =
+        app.xreader.data.prefs.TxtPrefs(appContext.settingsDataStore)
+
+    /** MR-6 Item 8: the OpenCC character tables (Apache-2.0),
+     * loaded lazily on first reader use. */
+    val scriptTables: app.xreader.data.parse.SimplifiedTraditional.Tables by lazy {
+        app.xreader.data.parse.SimplifiedTraditional.loadFromAssets(appContext)
+    }
+
     /** v1.0.2 (R18): per-book reader overrides (palette + text
      * size) layered over the global reader settings. */
     val bookReaderPrefs: app.xreader.data.prefs.BookReaderPrefs =
@@ -738,7 +753,41 @@ class AppContainer(
 
     val pdfTextExtractor: PdfBoxTextExtractor = PdfBoxTextExtractor(appContext)
 
-    val parserRegistry: ParserRegistry = ParserRegistry(pdfTextExtractor)
+    val parserRegistry: ParserRegistry = ParserRegistry(
+        pdfTextExtractor,
+        txtParserFactory = { pathKey ->
+            // MR-6: the TXT parser reads the live TxtPrefs
+            // snapshot (mode switch, regex overrides, per-file
+            // encoding choices). [pathKey] is the book's
+            // `Book.filePath` when the caller knows it (the
+            // re-detection path); plain imports pass null and the
+            // importer records the detected charset against the
+            // landed path instead.
+            app.xreader.data.parse.TxtParser(
+                settingsProvider = { txtPrefs.snapshot },
+                pathKey = pathKey,
+                encodingOverrideFor = { key ->
+                    txtPrefs.snapshot.encodingOverrideFor(key)
+                },
+                recordDetectedEncoding = { key, charsetName ->
+                    appScope.launch {
+                        txtPrefs.recordDetectedEncoding(key, charsetName)
+                    }
+                }
+            )
+        }
+    )
+
+    /** MR-6 Item 7: in-place TXT chapter re-detection (also the
+     * re-decode path for Item 5's per-book encoding door). */
+    val txtChapterRedetect: app.xreader.data.parse.TxtChapterRedetect by lazy {
+        app.xreader.data.parse.TxtChapterRedetect(
+            database = database,
+            storage = bookStorage,
+            registry = parserRegistry,
+            workRoot = appContext.cacheDir
+        )
+    }
 
     /** v1.0.6.2 (F6a): fills an empty local book's synopsis from
      * its own file metadata when the details screen opens. */
@@ -762,6 +811,14 @@ class AppContainer(
             app.xreader.ui.localreader.LocalReaderPrefs(
                 appContext.settingsDataStore
             ),
+        // MR-6 (Item 5): the per-book encoding record — the
+        // importer reports each landed TXT book's detected
+        // charset against its retained filePath.
+        onTxtEncodingDetected = { filePath, charsetName ->
+            appScope.launch {
+                txtPrefs.recordDetectedEncoding(filePath, charsetName)
+            }
+        },
         // D9: an import's thousands of chapter writes commit once.
         inTransaction = { block -> database.withTransaction(block) }
     )
@@ -1418,6 +1475,28 @@ class AppContainer(
         // below the transports in declaration order.
         appScope.launch {
             sourcePrefs.dohEnabled.collect { sourceDns.enabled = it }
+        }
+        // MR-6: keep the TXT settings snapshot current for the
+        // synchronous parser path.
+        appScope.launch {
+            txtPrefs.state.collect { txtPrefs.snapshot = it }
+        }
+        // Code 126 (splash): mirror the active design + M3 theme
+        // mode into a tiny SharedPreferences the next cold start
+        // reads synchronously in MainActivity.onCreate, so the
+        // pre- Compose window theme (and the Android 12+ splash)
+        // opens in the user's own design colours. Written on
+        // every design-state emission; read once per cold start.
+        appScope.launch {
+            designPrefs.state.collect { designState ->
+                runCatching {
+                    appContext.getSharedPreferences("splash_mirror", 0)
+                        .edit()
+                        .putString("design", designState.design.name)
+                        .putString("theme_mode", designState.themeMode.name)
+                        .apply()
+                }
+            }
         }
         // v1.7 Moon+ standard fix (Part 4): the one-time
         // paragraph-spacing default migration, on the app

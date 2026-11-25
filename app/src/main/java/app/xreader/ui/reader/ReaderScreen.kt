@@ -182,6 +182,10 @@ fun ReaderScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val config by viewModel.config.collectAsStateWithLifecycle()
+    // MR-6 (Items 8/9): the display-time TXT settings, for the
+    // settings sheet's Text display section.
+    val txtSettings by container.txtPrefs.state
+        .collectAsStateWithLifecycle(initialValue = container.txtPrefs.snapshot)
     val ttsState by viewModel.ttsState.collectAsStateWithLifecycle(
         initialValue = null
     )
@@ -2078,6 +2082,21 @@ fun ReaderScreen(
                     footnotesInText = footnotesInText,
                     onFootnotesInTextChange = { value ->
                         viewModel.setFootnotesInText(value)
+                    },
+                    // MR-6 (Items 8/9): Text display — the
+                    // script conversion mode + the TXT trims.
+                    scriptMode = txtSettings.scriptMode,
+                    onScriptModeChange = { mode ->
+                        scope.launch { container.txtPrefs.setScriptMode(mode) }
+                    },
+                    showTxtTrims = state.isTxtBook,
+                    trimBlankLines = txtSettings.trimBlankLines,
+                    onTrimBlankLinesChange = { value ->
+                        scope.launch { container.txtPrefs.setTrimBlankLines(value) }
+                    },
+                    trimPageTopBlanks = txtSettings.trimPageTopBlanks,
+                    onTrimPageTopBlanksChange = { value ->
+                        scope.launch { container.txtPrefs.setTrimPageTopBlanks(value) }
                     }
                 )
                 ActiveSheet.LISTEN -> ListenSheet(
@@ -2151,6 +2170,18 @@ fun ReaderScreen(
                     chapterLevels = state.chapterLevels,
                     currentChapterIndex = state.chapterIndex,
                     currentChapterProgress = state.chapterFraction,
+                    // MR-6 Item 7: the re-detect door exists for
+                    // local TXT books only (parity: both designs
+                    // share this one sheet).
+                    onRedetectChapters = if (state.isTxtBook) {
+                        { viewModel.redetectChapters() }
+                    } else {
+                        null
+                    },
+                    redetectAvailable = state.redetectAvailable,
+                    redetectBusy = state.redetectBusy,
+                    redetectNote = state.redetectNote,
+                    onDismissRedetectNote = { viewModel.clearRedetectNote() },
                     tocEntries = state.tocEntries,
                     currentTocEntryIndex = currentTocIndex,
                     bookmarks = bookmarks,

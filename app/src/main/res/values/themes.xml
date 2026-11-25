@@ -1,9 +1,46 @@
 <resources>
-    <!-- Pre-Compose splash theme: warm near-black (Ember Ink dark bg) so the
-         first frame already matches the app. Compose takes over immediately. -->
+    <!--
+      Code 126: the splash, done properly (owner's pick — the
+      branded moment). The base theme IS the Nocturne splash:
+      true black with the Xreader mark, so the Android 12+
+      system-drawn splash (which always uses the MANIFEST theme)
+      is exact for Nocturne and in-family for Material 3 dark.
+      MainActivity re-themes the window before setContent from
+      the splash mirror (the last session's design + M3 theme
+      mode) into one of the variants below, so the first Compose
+      frame lands in the user's own colours. The pre-126 theme
+      was a blank warm-black (#12100E, an old design's colour)
+      with no mark at all.
+    -->
     <style name="Theme.Xreader" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">#12100E</item>
-        <item name="android:statusBarColor">#12100E</item>
-        <item name="android:navigationBarColor">#12100E</item>
+        <item name="android:windowBackground">#000000</item>
+        <item name="android:statusBarColor">#000000</item>
+        <item name="android:navigationBarColor">#000000</item>
+        <item name="android:windowSplashScreenBackground">#000000</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_mark</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#000000</item>
+    </style>
+
+    <!-- Nocturne: true black, the mark in white. -->
+    <style name="Theme.Xreader.SplashNocturne" parent="Theme.Xreader" />
+
+    <!-- Material 3 dark: the baseline dark surface (#141218). -->
+    <style name="Theme.Xreader.SplashM3Dark" parent="Theme.Xreader">
+        <item name="android:windowBackground">#141218</item>
+        <item name="android:statusBarColor">#141218</item>
+        <item name="android:navigationBarColor">#141218</item>
+        <item name="android:windowSplashScreenBackground">#141218</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#141218</item>
+    </style>
+
+    <!-- Material 3 light: the baseline light surface (#FEF7FF),
+         the mark in near-black so it reads on the light ground. -->
+    <style name="Theme.Xreader.SplashM3Light" parent="Theme.Xreader">
+        <item name="android:windowBackground">#FEF7FF</item>
+        <item name="android:statusBarColor">#FEF7FF</item>
+        <item name="android:navigationBarColor">#FEF7FF</item>
+        <item name="android:windowSplashScreenBackground">#FEF7FF</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_mark_dark</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#FEF7FF</item>
     </style>
 </resources>

@@ -128,6 +128,41 @@ class MainActivity : FragmentActivity() {
         // with no navigator fragment in the app there is
         // nothing for process-death restoration to restore.
         super.onCreate(savedInstanceState)
+        // Code 126 (splash): open the window in the user's own
+        // design colours. The manifest theme is the static black
+        // base (exact for Nocturne, in-family for Material 3
+        // dark — the Android 12+ system splash can only ever use
+        // the manifest theme); this re-theme, from the splash
+        // mirror the container's collector keeps (the last
+        // session's design + M3 theme mode), runs before
+        // setContent so the window and the first Compose frame
+        // sit in the right colours. No mirror yet (first-ever
+        // cold start) keeps the base theme for that one start.
+        // No delay is added anywhere: the branded Compose moment
+        // still hands over the instant loading finishes.
+        runCatching {
+            val mirror = getSharedPreferences("splash_mirror", MODE_PRIVATE)
+            when (mirror.getString("design", null)) {
+                "EDITORIAL" -> setTheme(
+                    when (mirror.getString("theme_mode", null)) {
+                        "LIGHT" -> R.style.Theme_Xreader_SplashM3Light
+                        "FOLLOW_SYSTEM" -> if (
+                            resources.configuration.uiMode and
+                                android.content.res.Configuration
+                                    .UI_MODE_NIGHT_MASK ==
+                                android.content.res.Configuration
+                                    .UI_MODE_NIGHT_NO
+                        ) {
+                            R.style.Theme_Xreader_SplashM3Light
+                        } else {
+                            R.style.Theme_Xreader_SplashM3Dark
+                        }
+                        else -> R.style.Theme_Xreader_SplashM3Dark
+                    }
+                )
+                "NOCTURNE" -> setTheme(R.style.Theme_Xreader_SplashNocturne)
+            }
+        }
         enableEdgeToEdge()
         val container = (application as XreaderApp).container
         handleWidgetIntent(intent, container)

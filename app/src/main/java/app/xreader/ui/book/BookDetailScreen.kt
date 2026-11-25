@@ -224,6 +224,8 @@ fun BookDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val engineLabel by viewModel.engineLabel.collectAsStateWithLifecycle()
+    // MR-6 Item 5: the per-book encoding door's state.
+    val encodingDoor by viewModel.encodingDoor.collectAsStateWithLifecycle()
     // v1.5.6 (§3): in-place local books show their own Contents
     // (local_outline) instead of chapter rows.
     val localOutline by viewModel.localOutline.collectAsStateWithLifecycle()
@@ -1676,6 +1678,19 @@ fun BookDetailScreen(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
+                }
+            }
+            // MR-6 Item 5: the per-book encoding door — a
+            // local TXT book only (the VM publishes
+            // visible=false for everything else). Both book
+            // faces render this same section (parity).
+            if (encodingDoor.visible) {
+                item(key = "encoding-door") {
+                    EncodingDoorSection(
+                        door = encodingDoor,
+                        onPick = { viewModel.setBookEncoding(it) },
+                        onDismissNote = { viewModel.clearEncodingNote() }
+                    )
                 }
             }
             if (book.sourceType == app.xreader.data.db.SourceType.EXTENSION) {
@@ -6072,3 +6087,97 @@ private fun M3DownloadSplit(
     }
 }
 
+
+/** The encoding choices the MR-6 Item 5 door offers (Moon+'s
+ * candidate family; Auto is the detector's own pick). */
+internal val ENCODING_CHOICES: List<String> = listOf(
+    "UTF-8", "UTF-16LE", "UTF-16BE", "GBK", "Big5",
+    "Shift_JIS", "EUC-KR", "windows-1252"
+)
+
+/**
+ * MR-6 Item 5: the per-book encoding door, shared by both book
+ * faces (parity — one section, rendered by the Nocturne page and
+ * the Material 3 page alike). Picking a charset re-decodes and
+ * re-detects the book in place; the file-gone rule disables the
+ * chips and says so in plain words.
+ */
+@Composable
+internal fun EncodingDoorSection(
+    door: EncodingDoorState,
+    onPick: (String?) -> Unit,
+    onDismissNote: () -> Unit
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+    ) {
+        Text(
+            "Text encoding",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            when {
+                !door.available ->
+                    "Source file unavailable — re-import to change encoding."
+                door.current != null ->
+                    "Using ${door.current} — your choice for this book."
+                door.detected != null ->
+                    "Auto — detected ${door.detected}."
+                else -> "Auto."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        if (door.available && door.alsoPossible.isNotEmpty()) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "Also possible: ${door.alsoPossible.joinToString(" · ")}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (door.available) {
+            Spacer(Modifier.height(8.dp))
+            androidx.compose.foundation.layout.FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = door.current == null,
+                    enabled = !door.busy,
+                    onClick = { onPick(null) },
+                    label = { Text("Auto") }
+                )
+                for (choice in ENCODING_CHOICES) {
+                    FilterChip(
+                        selected = door.current == choice,
+                        enabled = !door.busy,
+                        onClick = { onPick(choice) },
+                        label = { Text(choice) }
+                    )
+                }
+            }
+            if (door.busy) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Re-reading the book with the new encoding…",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+        if (door.note != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                door.note,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.clickable { onDismissNote() }
+            )
+        }
+    }
+}

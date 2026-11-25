@@ -91,7 +91,15 @@ data class ParsedBook(
      * Contents sheet indents by it. Empty = flat, which is
      * every other parser's truth.
      */
-    val chapterLevels: List<Int> = emptyList()
+    val chapterLevels: List<Int> = emptyList(),
+    /**
+     * MR-6 (Item 5): the charset the TXT parser actually decoded
+     * with (a per-file override when one was set, else the
+     * detector's pick). The importer records it against the
+     * landed book's `filePath` — the per-book encoding record.
+     * Parsers without encoding detection leave the default.
+     */
+    val detectedEncoding: String? = null
 )
 
 /**
