@@ -33,6 +33,9 @@ Get the latest APK from the [**Releases**](https://github.com/Hyperjoker2511/Xre
 ## Screenshots
 
 <p align="center">
+  <img src="docs/images/m3/library.png" width="250" alt="Library — your books, covers first" />
+</p>
+<p align="center">
   <img src="docs/images/m3/reader.png" width="250" alt="The reader — clean prose on pure black" />
 </p>
 <p align="center">
