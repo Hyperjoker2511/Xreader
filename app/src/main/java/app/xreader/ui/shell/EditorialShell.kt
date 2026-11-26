@@ -125,6 +125,14 @@ internal fun EditorialPhoneShell(
             EditorialTabBar(
                 navController = navController,
                 appUpdateViewModel = appUpdateViewModel,
+                // Patch B (gap 57): "Icons only" reaches the
+                // pill — the picked item renders as an
+                // icon-only primary circle. The pill's native
+                // form IS Selected only (picked carries the
+                // label, the rest are icon circles), so
+                // Always / Selected only keep that form.
+                iconsOnly = designState.tabLabels ==
+                    app.xreader.data.prefs.M3TabLabels.ICONS_ONLY,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .navigationBarsPadding()
@@ -138,6 +146,7 @@ internal fun EditorialPhoneShell(
 private fun EditorialTabBar(
     navController: NavHostController,
     appUpdateViewModel: app.xreader.ui.update.AppUpdateViewModel,
+    iconsOnly: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val selected = selectedTab(navController)
@@ -160,7 +169,26 @@ private fun EditorialTabBar(
         ) {
             Tab.entries.forEach { tab ->
                 val isSelected = tab == selected
-                if (isSelected) {
+                if (isSelected && iconsOnly) {
+                    // Patch B (gap 57): Icons only — the
+                    // picked item keeps its primary ground
+                    // but drops the label, matching the
+                    // unpicked items' circle form.
+                    Box(
+                        Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
+                            .clickable { navigateToTab(navController, tab) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            tab.icon, tab.label,
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                } else if (isSelected) {
                     Row(
                         Modifier
                             .clip(CircleShape)

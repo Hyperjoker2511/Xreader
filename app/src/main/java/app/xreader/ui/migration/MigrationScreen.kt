@@ -494,14 +494,57 @@ private fun MigrationScreenM3(
                                         .onSurfaceVariant
                                 )
                             }
+                            // Patch B (gap 49): why unmatched
+                            // books can't link + the overflow
+                            // count, as Nocturne's preview says.
+                            if (preview.unmatchedTitles.isNotEmpty()) {
+                                Text(
+                                    "${preview.unmatchedTitles.size} " +
+                                        "can't be linked yet (their " +
+                                        "source isn't installed):",
+                                    style = MaterialTheme.typography
+                                        .bodyMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
                             preview.unmatchedTitles.take(10)
                                 .forEach { title ->
                                     Text(
-                                        title,
+                                        "• $title",
                                         style = MaterialTheme.typography
                                             .bodyMedium
                                     )
                                 }
+                            if (preview.unmatchedTitles.size > 10) {
+                                Text(
+                                    "…and " +
+                                        "${preview.unmatchedTitles.size - 10} " +
+                                        "more",
+                                    style = MaterialTheme.typography
+                                        .bodyMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
+                            // Patch B (gap 48): the backup
+                            // categories line.
+                            if (current.library.categories
+                                    .isNotEmpty()
+                            ) {
+                                Text(
+                                    "Categories in the backup: " +
+                                        current.library.categories
+                                            .joinToString(", ") +
+                                        " (Xreader has no shelves " +
+                                        "yet — they'll be listed in " +
+                                        "the result, not dropped.)",
+                                    style = MaterialTheme.typography
+                                        .bodyMedium,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
                         }
                     }
                     Row(
@@ -538,6 +581,22 @@ private fun MigrationScreenM3(
                             line,
                             style = MaterialTheme.typography.bodyMedium
                         )
+                    }
+                    // Patch B (gap 50): the "Still to link" list
+                    // of every unmatched title, as Nocturne's
+                    // Done state shows.
+                    if (current.unmatchedTitles.isNotEmpty()) {
+                        Text(
+                            "Still to link:",
+                            style = MaterialTheme.typography.titleSmall
+                        )
+                        current.unmatchedTitles.forEach { title ->
+                            Text(
+                                "• $title",
+                                style = MaterialTheme.typography
+                                    .bodyMedium
+                            )
+                        }
                     }
                     if (current.unmatchedTitles.isNotEmpty()) {
                         androidx.compose.material3.Button(

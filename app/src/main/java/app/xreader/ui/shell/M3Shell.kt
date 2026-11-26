@@ -105,7 +105,10 @@ internal fun M3RailShell(
                     navController = navController,
                     sourcesViewModel = sourcesViewModel,
                     downloadsViewModel = downloadsViewModel,
-                    labelsAlways = designState.tabLabels == M3TabLabels.ALWAYS,
+                    // Patch B (gap 57): the full tri-state —
+                    // ALWAYS / SELECTED_ONLY / ICONS_ONLY —
+                    // reaches the rail now, not just Always.
+                    tabLabels = designState.tabLabels,
                     wideRail = wideRail
                 )
             }
@@ -206,10 +209,14 @@ private fun M3TabRail(
     navController: NavHostController,
     sourcesViewModel: SourcesViewModel,
     downloadsViewModel: DownloadsViewModel,
-    labelsAlways: Boolean,
+    tabLabels: M3TabLabels,
     wideRail: Boolean
 ) {
     val selected = selectedTab(navController)
+    val labelsAlways = tabLabels == M3TabLabels.ALWAYS
+    // Patch B (gap 57): Icons only — no item carries a
+    // label at all, picked or not.
+    val iconsOnly = tabLabels == M3TabLabels.ICONS_ONLY
     if (wideRail) {
         val railState = rememberWideNavigationRailState(
             initialValue = WideNavigationRailValue.Expanded
@@ -223,7 +230,9 @@ private fun M3TabRail(
                     icon = {
                         M3TabIcon(tab, sourcesViewModel, downloadsViewModel)
                     },
-                    label = if (labelsAlways || isSelected) {
+                    label = if (!iconsOnly &&
+                        (labelsAlways || isSelected)
+                    ) {
                         { Text(tab.label) }
                     } else {
                         null
@@ -242,7 +251,11 @@ private fun M3TabRail(
                     icon = {
                         M3TabIcon(tab, sourcesViewModel, downloadsViewModel)
                     },
-                    label = { Text(tab.label) },
+                    label = if (iconsOnly) {
+                        null
+                    } else {
+                        { Text(tab.label) }
+                    },
                     alwaysShowLabel = labelsAlways
                 )
             }

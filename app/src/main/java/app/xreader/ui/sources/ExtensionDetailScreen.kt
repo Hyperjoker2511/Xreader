@@ -193,6 +193,29 @@ fun ExtensionDetailScreen(
                         }
                     )
                 }
+                // Patch B (gap 42): the Kind + Fingerprint value
+                // rows Nocturne's identity card carries.
+                item(key = "m3ext-kind") {
+                    ListItem(
+                        headlineContent = { Text("Kind") },
+                        supportingContent = {
+                            Text(kind?.label ?: ext.kind.name)
+                        }
+                    )
+                }
+                item(key = "m3ext-fingerprint") {
+                    ListItem(
+                        headlineContent = { Text("Fingerprint") },
+                        supportingContent = {
+                            Text(
+                                ext.sha256,
+                                style = MaterialTheme
+                                    .typography.bodySmall,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
+                    )
+                }
                 item(key = "m3ext-enabled") {
                     ListItem(
                         headlineContent = { Text("Enabled") },
@@ -430,6 +453,57 @@ fun ExtensionDetailScreen(
                                             .onSurfaceVariant
                                     )
                                 }
+                                // Patch B (gap 40): the proof
+                                // evidence + "Last checked" time
+                                // Nocturne's Health card shows.
+                                state.health?.let { health ->
+                                    if (health.proofBookTitle
+                                            .isNotBlank()
+                                    ) {
+                                        Text(
+                                            "Proof: opened " +
+                                                "“${health.proofBookTitle}”" +
+                                                if (health
+                                                        .proofChapterTitle
+                                                        .isNotBlank()
+                                                ) {
+                                                    " · " +
+                                                        health.proofChapterTitle
+                                                } else {
+                                                    ""
+                                                },
+                                            style = MaterialTheme
+                                                .typography.bodySmall,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                    if (health.proofFirstLine
+                                            .isNotBlank()
+                                    ) {
+                                        Text(
+                                            "“${health.proofFirstLine}”",
+                                            style = MaterialTheme
+                                                .typography.bodySmall,
+                                            color = MaterialTheme
+                                                .colorScheme
+                                                .onSurfaceVariant
+                                        )
+                                    }
+                                    Text(
+                                        app.xreader.data.extension
+                                            .lastCheckedLine(
+                                                health.checkedAtMillis,
+                                                System.currentTimeMillis()
+                                            ),
+                                        style = MaterialTheme
+                                            .typography.bodySmall,
+                                        color = MaterialTheme
+                                            .colorScheme
+                                            .onSurfaceVariant
+                                    )
+                                }
                             }
                         },
                         trailingContent = {
@@ -447,6 +521,165 @@ fun ExtensionDetailScreen(
                             }
                         }
                     )
+                }
+                // Patch B (gap 39): "Copy details" — the same
+                // diagnostics payload, under the same condition
+                // (a NEEDS_SETUP / BROKEN verdict), as Nocturne's
+                // Health card button.
+                val m3Health = state.health
+                if (m3Health != null && (
+                        m3Health.state ==
+                            app.xreader.data.extension
+                                .SourceHealthState.NEEDS_SETUP ||
+                            m3Health.state ==
+                            app.xreader.data.extension
+                                .SourceHealthState.BROKEN
+                        )
+                ) {
+                    item(key = "m3ext-copy-details") {
+                        val clipboard = androidx.compose.ui.platform
+                            .LocalClipboardManager.current
+                        TextButton(
+                            onClick = {
+                                val failedResult =
+                                    state.healthResults.firstOrNull {
+                                        !it.ok && it.capability in
+                                            app.xreader.data.extension
+                                                .ContractVerdict
+                                                .READING_CORE
+                                    }
+                                val failedCapability =
+                                    failedResult?.capability
+                                        ?: m3Health.failedCore
+                                            .firstOrNull()?.let { raw ->
+                                                runCatching {
+                                                    app.xreader
+                                                        .data.extension
+                                                        .SourceCapability
+                                                        .valueOf(raw)
+                                                }.getOrNull()
+                                            }
+                                val failingStep =
+                                    when (failedCapability) {
+                                        app.xreader.data.extension
+                                            .SourceCapability.LIST ->
+                                            "Book list"
+                                        app.xreader.data.extension
+                                            .SourceCapability.SEARCH ->
+                                            "Search"
+                                        app.xreader.data.extension
+                                            .SourceCapability.DETAILS ->
+                                            "Book pages"
+                                        app.xreader.data.extension
+                                            .SourceCapability.CHAPTERS ->
+                                            "Chapter lists"
+                                        app.xreader.data.extension
+                                            .SourceCapability.TEXT ->
+                                            "Chapter text"
+                                        else -> failedCapability?.name
+                                    }
+                                clipboard.setText(
+                                    androidx.compose.ui.text
+                                        .AnnotatedString(
+                                            app.xreader.data.extension
+                                                .ProblemDetails.format(
+                                                    host = state
+                                                        .linkConfig
+                                                        ?.baseUrl?.let {
+                                                            app.xreader
+                                                                .data
+                                                                .extension
+                                                                .CookieParsing
+                                                                .hostOf(it)
+                                                        },
+                                                    failingStep =
+                                                        failingStep,
+                                                    reason = failedResult
+                                                        ?.detail
+                                                        ?: m3Health
+                                                            .summaryLine(),
+                                                    appVersion = app
+                                                        .xreader.BuildConfig
+                                                        .VERSION_NAME,
+                                                    repair = state
+                                                        .lastRepair,
+                                                    browserView = state
+                                                        .linkConfig
+                                                        ?.needsRendering ==
+                                                        true,
+                                                    recentProblems = app
+                                                        .xreader.data
+                                                        .extension
+                                                        .DiagnosticLog
+                                                        .entries()
+                                                )
+                                        )
+                                )
+                                detailsCopied = true
+                            },
+                            modifier = Modifier
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            Text(
+                                if (detailsCopied) {
+                                    "Copied ✓"
+                                } else {
+                                    "Copy details"
+                                }
+                            )
+                        }
+                    }
+                }
+                // Patch B (gap 41): the "Last repair" record —
+                // the persisted section Nocturne shows, same
+                // words and same derivation.
+                state.lastRepair?.let { lastRepair ->
+                    item(key = "m3ext-last-repair") {
+                        Column(
+                            Modifier.padding(horizontal = 16.dp),
+                            verticalArrangement =
+                                Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                "Last repair",
+                                style = MaterialTheme
+                                    .typography.titleSmall
+                            )
+                            Text(
+                                app.xreader.data.extension
+                                    .lastCheckedLine(
+                                        lastRepair.repairedAtMillis,
+                                        System.currentTimeMillis()
+                                    ).replace("Last checked", "Ran") +
+                                    if (lastRepair.saved) {
+                                        " — the rules were rebuilt " +
+                                            "and saved."
+                                    } else {
+                                        " — the rules weren't changed."
+                                    },
+                                style = MaterialTheme
+                                    .typography.bodySmall,
+                                color = MaterialTheme.colorScheme
+                                    .onSurfaceVariant
+                            )
+                            if (lastRepair.note.isNotBlank()) {
+                                Text(
+                                    lastRepair.note,
+                                    style = MaterialTheme
+                                        .typography.bodySmall
+                                )
+                            }
+                            lastRepair.stageLines.forEach { line ->
+                                Text(
+                                    "· $line",
+                                    style = MaterialTheme
+                                        .typography.bodySmall,
+                                    color = MaterialTheme
+                                        .colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
                 }
                 state.pageShapeSummary?.let { summary ->
                     item(key = "m3ext-pageshape") {

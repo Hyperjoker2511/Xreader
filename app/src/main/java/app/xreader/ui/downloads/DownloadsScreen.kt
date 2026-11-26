@@ -1553,7 +1553,10 @@ private fun EditorialFinishedDownloadRow(
                             )
                         )
                     }
-                    if (showSize && !group.isLocalFile) {
+                    // Patch B (gap 45): size shows for local-file
+                    // books too — Nocturne always shows it
+                    // (sizeBytes already resolves localFileBytes).
+                    if (showSize) {
                         Text(
                             formatBytes(sizeBytes),
                             style = MaterialTheme.typography.bodySmall,

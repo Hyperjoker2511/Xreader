@@ -356,6 +356,13 @@ fun LibraryScreen(
             viewModel = viewModel,
             coverFile = coverFile,
             designState = designState,
+            // Patch B (gap 61): the shell's coverGlow argument
+            // (the switch, scope-gated in MainScaffold exactly
+            // as for Nocturne) — this face's cards consume it
+            // below; before this wiring the Editorial branch
+            // never received it and the switch changed nothing
+            // here.
+            coverGlow = coverGlow,
             onAddBook = onAddBook,
             onOpenBook = onOpenBook,
             onContinueReading = onContinueReading,
@@ -2687,6 +2694,44 @@ private fun EditorialPill(text: String) {
     }
 }
 
+/**
+ * Patch B (gap 61): the Editorial face's cover glow — the
+ * same bloom Nocturne's ShelfGridCard draws through
+ * BookPosterCard: the book's glow colour as a soft radial
+ * (55% at the centre, gone by 0.8 × the card's largest side),
+ * drawn BEHIND the card, so it reads as a bloom around the
+ * cover, never a tint over it. Null = no glow (the switch's
+ * off state, or the shell's scope gate closed).
+ */
+private fun Modifier.editorialCoverGlow(glowColor: Color?): Modifier =
+    if (glowColor != null) {
+        drawBehind {
+            drawCircle(
+                brush = Brush.radialGradient(
+                    listOf(
+                        glowColor.copy(alpha = 0.55f),
+                        Color.Transparent
+                    ),
+                    radius = size.maxDimension * 0.8f
+                ),
+                radius = size.maxDimension * 0.8f
+            )
+        }
+    } else {
+        this
+    }
+
+/** Patch B (gap 61): the glow colour for one book — the
+ * exact source ShelfGridCard uses (the designed placeholder
+ * palette's vibrant, derived from the title), so both faces
+ * bloom in the same colour for the same book. */
+@Composable
+private fun rememberShelfGlowColor(title: String): Color? =
+    remember(title) {
+        app.xreader.ui.theme.CoverPaletteExtractor
+            .placeholderPalette(title).vibrant
+    }
+
 @Composable
 private fun EditorialCover(
     shelf: ShelfBook,
@@ -2696,11 +2741,17 @@ private fun EditorialCover(
     heightDp: Int,
     selected: Boolean,
     mangaTag: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    coverGlow: Boolean = false
 ) {
     val scheme = MaterialTheme.colorScheme
+    // Remembered unconditionally (hook order never depends on
+    // the switch); the switch only gates whether it is drawn.
+    val glowColor = rememberShelfGlowColor(shelf.book.title)
+        .takeIf { coverGlow }
     Box(
         modifier
+            .editorialCoverGlow(glowColor)
             .size(width = widthDp.dp, height = heightDp.dp)
             .then(
                 if (selected) {
@@ -2741,7 +2792,9 @@ private fun EditorialCover(
                 )
             }
         }
-        if (shelf.fraction > 0f && shelf.fraction < 1f) {
+        if (state.libraryPrefs.showBadges &&
+            shelf.fraction > 0f && shelf.fraction < 1f
+        ) {
             Box(
                 Modifier
                     .align(Alignment.BottomStart)
@@ -2771,7 +2824,8 @@ private fun EditorialCoverCard(
     subLine: String,
     selected: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    onLongClick: () -> Unit,
+    coverGlow: Boolean = false
 ) {
     val manga = editorialIsManga(state, shelf)
     val widthDp = if (manga) 92 else 104
@@ -2783,7 +2837,8 @@ private fun EditorialCoverCard(
         EditorialCover(
             shelf = shelf, state = state, coverFile = coverFile,
             widthDp = widthDp, heightDp = 148,
-            selected = selected, mangaTag = manga
+            selected = selected, mangaTag = manga,
+            coverGlow = coverGlow
         )
         Spacer(Modifier.height(8.dp))
         Text(
@@ -2797,7 +2852,11 @@ private fun EditorialCoverCard(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             modifier = Modifier.padding(top = 2.dp)
         ) {
-            val newCount = state.metas[shelf.book.id]?.newChapterCount ?: 0
+            val newCount = if (state.libraryPrefs.showBadges) {
+                state.metas[shelf.book.id]?.newChapterCount ?: 0
+            } else {
+                0
+            }
             if (newCount > 0) {
                 EditorialPill("$newCount NEW")
             }
@@ -2929,7 +2988,8 @@ private val editorialTabs: List<Pair<String, String>> = listOf(
     "ON_HOLD" to "On hold",
     "PLAN_TO_READ" to "Plan to read",
     "COMPLETED" to "Completed",
-    "DROPPED" to "Dropped"
+    "DROPPED" to "Dropped",
+    "NOT_STARTED" to "Not started"
 )
 
 private fun editorialTabKey(
@@ -2961,6 +3021,10 @@ private fun EditorialLibraryContent(
     onProfile: () -> Unit,
     onOpenUpdates: () -> Unit,
     onOpenAddList: () -> Unit = {},
+    /** Patch B (gap 61): the Library cover glow, already
+     * resolved by the shell (switch + scope gate) — the same
+     * effective value Nocturne's ShelfGridCard consumes. */
+    coverGlow: Boolean = false,
     updateState: app.xreader.ui.update.AppUpdateViewModel.UiState? = null,
     onUpdateNow: () -> Unit = {},
     onDismissUpdate: () -> Unit = {},
@@ -2980,6 +3044,8 @@ private fun EditorialLibraryContent(
     var downloadedOnly by remember { mutableStateOf(false) }
     var favouritesOnly by remember { mutableStateOf(false) }
     var sheetOpen by remember { mutableStateOf(false) }
+    var notStartedOnly by remember { mutableStateOf(false) }
+    var quickActionsFor by remember { mutableStateOf<ShelfBook?>(null) }
     var statusDialogFor by remember { mutableStateOf<ShelfBook?>(null) }
     var removeTarget by remember { mutableStateOf<ShelfBook?>(null) }
     // Code 124 (D2/D3): shelves + multi-select, the same
@@ -3003,10 +3069,21 @@ private fun EditorialLibraryContent(
         }
     }
     fun statusOf(shelf: ShelfBook) = editorialStatusOf(state, shelf)
+    // Gap 18: the NOT_STARTED predicate, exactly as
+    // LibraryListLogic applies it for Nocturne's filter sheet —
+    // no progress, not finished, and the book's own status is
+    // not COMPLETED.
+    fun matchesNotStarted(shelf: ShelfBook): Boolean {
+        val rawStatus = state.metas[shelf.book.id]?.status
+            ?: app.xreader.data.library.ReadingStatus.NONE
+        return shelf.fraction <= 0f && !shelf.book.finished &&
+            rawStatus != app.xreader.data.library.ReadingStatus.COMPLETED
+    }
     fun matchesFlags(shelf: ShelfBook): Boolean =
         (!downloadedOnly ||
             (state.downloadCounts[shelf.book.id]?.downloaded ?: 0) > 0) &&
-            (!favouritesOnly || shelf.book.id in state.favourites)
+            (!favouritesOnly || shelf.book.id in state.favourites) &&
+            (!notStartedOnly || matchesNotStarted(shelf))
     fun matchesQuery(shelf: ShelfBook): Boolean = query.isBlank() ||
         shelf.book.title.lowercase().contains(query.trim().lowercase()) ||
         shelf.book.author.lowercase().contains(query.trim().lowercase())
@@ -3048,6 +3125,74 @@ private fun EditorialLibraryContent(
             state.memberships, nowMillis
         )
     }
+    // Gap 14: the selected user shelf, for the quick-actions
+    // sheet's "Remove from <shelf>" row — the same resolution
+    // the Nocturne composition makes.
+    val selectedUserShelf = remember(state.selectedShelf, state.userShelves) {
+        state.selectedShelf.removePrefix("user:").toLongOrNull()
+            ?.let { id -> state.userShelves.firstOrNull { it.id == id } }
+    }
+    // Gap 20 (determination: the shared LibraryPrefs DO take
+    // effect in this face): layout, columns/cover size and
+    // showBadges/showContinueReading come from
+    // state.libraryPrefs, exactly as Nocturne reads them. The
+    // M3 face's own knobs keep their ground where they govern
+    // different things (libraryContinueRail ANDs with
+    // showContinueReading; shelf density stays a spacing knob).
+    // Column resolution mirrors Nocturne: an explicit Customise
+    // pick wins; in Auto the Novels side resolves from the
+    // Cover size and the Manga side from the width tier — this
+    // page's own side padding is 16 dp a side, not 20.
+    val showBadges = state.libraryPrefs.showBadges
+    val libConfiguration = LocalConfiguration.current
+    val libAppSize = LocalAppSize.current
+    val libUiMetrics = LocalUiMetrics.current
+    val editorialColumns = if (state.libraryPrefs.gridColumnsAuto) {
+        if (state.librarySide ==
+            app.xreader.data.extension.MediaKind.TEXT
+        ) {
+            app.xreader.data.library.CoverSizeLogic.resolveColumns(
+                availableWidthDp = libConfiguration.screenWidthDp - 32,
+                size = state.libraryPrefs.coverSize,
+                appSize = libAppSize
+            )
+        } else {
+            libUiMetrics.gridColumns
+        }
+    } else {
+        state.libraryPrefs.gridColumns
+    }
+    // Gap 17: per-side new-chapter counts for the switch
+    // labels — LibrarySplit over the same shelf-scoped metas
+    // the Nocturne switch reads.
+    val newBySide = remember(state.metas, state.bookKinds) {
+        app.xreader.data.library.LibrarySplit
+            .newChaptersBySide(state.metas, state.bookKinds)
+    }
+    // Gap 19: the per-book meta line, Nocturne's ShelfGridCard
+    // derivation — chapter count · downloaded · unread, each
+    // fragment only when it has something to say.
+    fun editorialMetaLine(shelf: ShelfBook): String {
+        val downloaded =
+            state.downloadCounts[shelf.book.id]?.downloaded ?: 0
+        val unread = shelf.book.totalChapters -
+            (shelf.fraction * shelf.book.totalChapters).toInt()
+        return listOfNotNull(
+            if (shelf.book.totalChapters > 0) {
+                "${shelf.book.totalChapters} chapters"
+            } else {
+                null
+            },
+            if (downloaded > 0) "$downloaded downloaded" else null,
+            if (shelf.fraction > 0f && shelf.fraction < 1f &&
+                unread > 0
+            ) {
+                "$unread unread"
+            } else {
+                null
+            }
+        ).joinToString(" · ")
+    }
     // The carousel: the design's progress rule over the active
     // side, the state's hero leading, the rest by recency.
     val carousel = remember(sideBooks, state.metas, state.continueReading) {
@@ -3085,6 +3230,7 @@ private fun EditorialLibraryContent(
                         app.xreader.data.library.ReadingStatus.COMPLETED
                     "DROPPED" -> statusOf(shelf) ==
                         app.xreader.data.library.ReadingStatus.DROPPED
+                    "NOT_STARTED" -> matchesNotStarted(shelf)
                     else -> true
                 }
                 tabMatch && matchesFlags(shelf) && matchesQuery(shelf)
@@ -3092,7 +3238,7 @@ private fun EditorialLibraryContent(
         )
     }
     val frontPage = tabKey == "ALL" && query.isBlank() &&
-        !downloadedOnly && !favouritesOnly
+        !downloadedOnly && !favouritesOnly && !notStartedOnly
     val dockClearance = app.xreader.ui.theme.LocalDockClearance.current
     val greeting = remember {
         when (java.util.Calendar.getInstance()
@@ -3174,7 +3320,25 @@ private fun EditorialLibraryContent(
                         }
                         // The avatar disc: his avatar when set,
                         // else his initial on the peach.
+                        // Gap 22 (determination: parity — the
+                        // level is information Nocturne's header
+                        // pill carries): the disc rides in a
+                        // profile pill with "Level N" beside it,
+                        // in this face's label type; one tap
+                        // target for the whole pill.
                         val avatar = state.avatarFile
+                        Row(
+                            Modifier
+                                .clip(
+                                    androidx.compose.foundation.shape
+                                        .CircleShape
+                                )
+                                .clickable { onProfile() }
+                                .padding(end = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(7.dp)
+                        ) {
                         Box(
                             Modifier
                                 .size(36.dp)
@@ -3182,8 +3346,7 @@ private fun EditorialLibraryContent(
                                     androidx.compose.foundation.shape
                                         .CircleShape
                                 )
-                                .background(scheme.tertiaryContainer)
-                                .clickable { onProfile() },
+                                .background(scheme.tertiaryContainer),
                             contentAlignment = Alignment.Center
                         ) {
                             if (avatar != null) {
@@ -3207,6 +3370,12 @@ private fun EditorialLibraryContent(
                                     color = scheme.onTertiaryContainer
                                 )
                             }
+                        }
+                        Text(
+                            "Level ${state.profileLevel}",
+                            style = MaterialTheme.typography.labelLarge,
+                            color = scheme.onSurfaceVariant
+                        )
                         }
                     }
                 }
@@ -3252,11 +3421,31 @@ private fun EditorialLibraryContent(
                         modifier = Modifier.padding(top = 14.dp)
                     ) {
                         Row(Modifier.padding(4.dp)) {
+                            // Gap 17: each side's label carries
+                            // its live new-chapter count, via the
+                            // shared switchLabel shape Nocturne
+                            // uses ("Novels · 3").
                             listOf(
                                 app.xreader.data.extension.MediaKind.TEXT
-                                    to "Novels",
+                                    to app.xreader.data.library
+                                        .LibrarySplit.switchLabel(
+                                            app.xreader.data.extension
+                                                .MediaKind.TEXT,
+                                            newBySide[
+                                                app.xreader.data.extension
+                                                    .MediaKind.TEXT
+                                            ] ?: 0
+                                        ),
                                 app.xreader.data.extension.MediaKind.MANGA
-                                    to "Manga"
+                                    to app.xreader.data.library
+                                        .LibrarySplit.switchLabel(
+                                            app.xreader.data.extension
+                                                .MediaKind.MANGA,
+                                            newBySide[
+                                                app.xreader.data.extension
+                                                    .MediaKind.MANGA
+                                            ] ?: 0
+                                        )
                             ).forEach { (kind, label) ->
                                 val picked = state.librarySide == kind
                                 Box(
@@ -3333,6 +3522,7 @@ private fun EditorialLibraryContent(
             }
             // ── 8–15: Continue reading ──────────────────────
             if (frontPage && designState.libraryContinueRail &&
+                state.libraryPrefs.showContinueReading &&
                 carousel.isNotEmpty() && memberFilter == null
             ) {
                 item(key = "paper-continue-head") {
@@ -3396,6 +3586,7 @@ private fun EditorialLibraryContent(
                                 lead = lead,
                                 cardWidth = cardWidth,
                                 coverFile = coverFile,
+                                coverGlow = coverGlow,
                                 onClick = {
                                     if (lead &&
                                         state.continueReading?.book?.id ==
@@ -3408,6 +3599,73 @@ private fun EditorialLibraryContent(
                                     } else {
                                         viewModel.markSeen(shelf.book.id)
                                         onOpenBook(shelf.book.id)
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+            // ── Gap 16: For you — from tags you follow ──────
+            // The same state.forYou row Nocturne renders (the
+            // VM scopes it to the active side already), on the
+            // front page over the All shelf only.
+            if (frontPage && state.forYou.isNotEmpty() &&
+                state.selectedShelf == "all" && query.isBlank() &&
+                memberFilter == null
+            ) {
+                item(key = "paper-foryou-head") {
+                    Text(
+                        "For you — from tags you follow",
+                        style = MaterialTheme.typography.titleLarge
+                            .copy(fontSize = 19.sp),
+                        modifier = Modifier.padding(top = 22.dp, bottom = 12.dp)
+                    )
+                }
+                item(key = "paper-foryou-row") {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        contentPadding = PaddingValues(end = 4.dp)
+                    ) {
+                        items(
+                            state.forYou,
+                            key = { "paper-fy-${it.book.id}" }
+                        ) { shelf ->
+                            EditorialCoverCard(
+                                shelf = shelf,
+                                state = state,
+                                coverFile = coverFile,
+                                coverGlow = coverGlow,
+                                subLine = editorialFeatureLine(state, shelf),
+                                selected = selection
+                                    ?.contains(shelf.book.id) == true,
+                                onClick = {
+                                    val current = selection
+                                    if (current != null) {
+                                        selection =
+                                            if (shelf.book.id in current) {
+                                                (current - shelf.book.id)
+                                                    .ifEmpty { null }
+                                            } else {
+                                                current + shelf.book.id
+                                            }
+                                    } else {
+                                        viewModel.markSeen(shelf.book.id)
+                                        onOpenBook(shelf.book.id)
+                                    }
+                                },
+                                onLongClick = {
+                                    val current = selection
+                                    if (current != null) {
+                                        selection =
+                                            if (shelf.book.id in current) {
+                                                (current - shelf.book.id)
+                                                    .ifEmpty { null }
+                                            } else {
+                                                current + shelf.book.id
+                                            }
+                                    } else {
+                                        quickActionsFor = shelf
                                     }
                                 }
                             )
@@ -3538,12 +3796,59 @@ private fun EditorialLibraryContent(
                             },
                             style = MaterialTheme.typography.titleLarge
                         )
+                        // Gap 21: per-shelf / per-side guidance,
+                        // Nocturne's content — which side is
+                        // empty and where its books come from,
+                        // or which act fills this shelf.
                         Text(
-                            if (state.books.isEmpty()) {
-                                "Add a book and it will wait for " +
-                                    "you here."
-                            } else {
-                                "No books match this view right now."
+                            when {
+                                state.books.isEmpty() ->
+                                    "Add a book and it will wait for " +
+                                        "you here."
+                                sideBooks.isEmpty() ->
+                                    if (state.librarySide ==
+                                        app.xreader.data.extension
+                                            .MediaKind.MANGA
+                                    ) {
+                                        "No manga here yet. Manga lives " +
+                                            "in Explore — open the " +
+                                            "Keiyoushi catalogue, add a " +
+                                            "series, and it will live on " +
+                                            "this side."
+                                    } else {
+                                        "No novels on this side — your " +
+                                            "books are waiting under Manga."
+                                    }
+                                memberFilter != null -> when {
+                                    state.selectedShelf ==
+                                        app.xreader.data.library
+                                            .ShelfLogic.BUILTIN_BEHIND_ON ->
+                                        "You're all caught up — nothing " +
+                                            "here is behind."
+                                    state.selectedShelf ==
+                                        app.xreader.data.library
+                                            .ShelfLogic.BUILTIN_FAVOURITES ->
+                                        "Nothing here yet. Open a book " +
+                                            "and tap Favourite to keep " +
+                                            "it here."
+                                    app.xreader.data.library.ShelfLogic
+                                        .statusForBuiltin(
+                                            state.selectedShelf
+                                        ) != null ->
+                                        "Nothing here yet. Mark a book " +
+                                            "as " +
+                                            app.xreader.data.library
+                                                .ShelfLogic.builtinName(
+                                                    state.selectedShelf
+                                                ) +
+                                            " from its book page."
+                                    else ->
+                                        "Nothing on this shelf yet. " +
+                                            "Long-press a book and choose " +
+                                            "“Add to shelf”."
+                                }
+                                else ->
+                                    "No books match this view right now."
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = scheme.onSurfaceVariant
@@ -3558,24 +3863,43 @@ private fun EditorialLibraryContent(
                         }
                     }
                 }
-            } else {
+            } else if (state.libraryPrefs.layout ==
+                app.xreader.data.library.LibraryLayout.BENTO
+            ) {
+                // Gap 20: BENTO — alternating rows whose first
+                // card is twice as wide, as Nocturne lays it out.
+                val bentoRows = gridBooks.chunked(3)
                 items(
-                    gridBooks.chunked(2),
-                    key = { "paper-row-${it.first().book.id}" }
-                ) { pair ->
+                    bentoRows,
+                    key = { row ->
+                        "paper-bento-" + row.joinToString("-") {
+                            it.book.id.toString()
+                        }
+                    }
+                ) { rowBooks ->
+                    val bigFirst = bentoRows.indexOf(rowBooks) % 2 == 0
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .padding(top = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        pair.forEach { shelf ->
+                        rowBooks.forEachIndexed { index, shelf ->
                             EditorialGridCard(
                                 shelf = shelf,
                                 favourite = shelf.book.id in state.favourites,
                                 selected = selection
                                     ?.contains(shelf.book.id) == true,
+                                newChapters = if (showBadges) {
+                                    state.metas[shelf.book.id]
+                                        ?.newChapterCount ?: 0
+                                } else {
+                                    0
+                                },
+                                showBadges = showBadges,
+                                metaLine = editorialMetaLine(shelf),
                                 coverFile = coverFile,
+                                coverGlow = coverGlow,
                                 onClick = {
                                     val current = selection
                                     if (current != null) {
@@ -3593,13 +3917,98 @@ private fun EditorialLibraryContent(
                                 },
                                 onLongPress = {
                                     val current = selection
-                                    selection = if (current == null) {
-                                        setOf(shelf.book.id)
-                                    } else if (shelf.book.id in current) {
-                                        (current - shelf.book.id)
-                                            .ifEmpty { null }
+                                    if (current != null) {
+                                        selection =
+                                            if (shelf.book.id in current) {
+                                                (current - shelf.book.id)
+                                                    .ifEmpty { null }
+                                            } else {
+                                                current + shelf.book.id
+                                            }
                                     } else {
-                                        current + shelf.book.id
+                                        quickActionsFor = shelf
+                                    }
+                                },
+                                onToggleFavourite = {
+                                    viewModel.setFavourite(
+                                        shelf.book.id,
+                                        shelf.book.id !in state.favourites
+                                    )
+                                },
+                                onSetStatus = { statusDialogFor = shelf },
+                                onRemove = { removeTarget = shelf },
+                                modifier = Modifier.weight(
+                                    if (bigFirst && index == 0 &&
+                                        rowBooks.size > 1
+                                    ) {
+                                        2f
+                                    } else {
+                                        1f
+                                    }
+                                )
+                            )
+                        }
+                        repeat(3 - rowBooks.size) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
+                }
+            } else if (state.libraryPrefs.layout ==
+                app.xreader.data.library.LibraryLayout.GRID
+            ) {
+                items(
+                    gridBooks.chunked(editorialColumns),
+                    key = { "paper-row-${it.first().book.id}" }
+                ) { pair ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(top = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        pair.forEach { shelf ->
+                            EditorialGridCard(
+                                shelf = shelf,
+                                favourite = shelf.book.id in state.favourites,
+                                selected = selection
+                                    ?.contains(shelf.book.id) == true,
+                                newChapters = if (showBadges) {
+                                    state.metas[shelf.book.id]
+                                        ?.newChapterCount ?: 0
+                                } else {
+                                    0
+                                },
+                                showBadges = showBadges,
+                                metaLine = editorialMetaLine(shelf),
+                                coverFile = coverFile,
+                                coverGlow = coverGlow,
+                                onClick = {
+                                    val current = selection
+                                    if (current != null) {
+                                        selection =
+                                            if (shelf.book.id in current) {
+                                                (current - shelf.book.id)
+                                                    .ifEmpty { null }
+                                            } else {
+                                                current + shelf.book.id
+                                            }
+                                    } else {
+                                        viewModel.markSeen(shelf.book.id)
+                                        onOpenBook(shelf.book.id)
+                                    }
+                                },
+                                onLongPress = {
+                                    val current = selection
+                                    if (current != null) {
+                                        selection =
+                                            if (shelf.book.id in current) {
+                                                (current - shelf.book.id)
+                                                    .ifEmpty { null }
+                                            } else {
+                                                current + shelf.book.id
+                                            }
+                                    } else {
+                                        quickActionsFor = shelf
                                     }
                                 },
                                 onToggleFavourite = {
@@ -3613,9 +4022,67 @@ private fun EditorialLibraryContent(
                                 modifier = Modifier.weight(1f)
                             )
                         }
-                        if (pair.size == 1) {
+                        repeat(editorialColumns - pair.size) {
                             Spacer(Modifier.weight(1f))
                         }
+                    }
+                }
+            } else {
+                // Gap 20: COMFORTABLE_LIST / COMPACT_LIST —
+                // one M3 list row per book.
+                items(
+                    gridBooks,
+                    key = { "paper-list-${it.book.id}" }
+                ) { shelf ->
+                    Box(Modifier.padding(top = 10.dp)) {
+                        EditorialListRow(
+                            shelf = shelf,
+                            favourite = shelf.book.id in state.favourites,
+                            selected = selection
+                                ?.contains(shelf.book.id) == true,
+                            newChapters = if (showBadges) {
+                                state.metas[shelf.book.id]
+                                    ?.newChapterCount ?: 0
+                            } else {
+                                0
+                            },
+                            showBadges = showBadges,
+                            metaLine = editorialMetaLine(shelf),
+                            coverGlow = coverGlow,
+                            compact = state.libraryPrefs.layout ==
+                                app.xreader.data.library.LibraryLayout
+                                    .COMPACT_LIST,
+                            coverFile = coverFile,
+                            onClick = {
+                                val current = selection
+                                if (current != null) {
+                                    selection =
+                                        if (shelf.book.id in current) {
+                                            (current - shelf.book.id)
+                                                .ifEmpty { null }
+                                        } else {
+                                            current + shelf.book.id
+                                        }
+                                } else {
+                                    viewModel.markSeen(shelf.book.id)
+                                    onOpenBook(shelf.book.id)
+                                }
+                            },
+                            onLongPress = {
+                                val current = selection
+                                if (current != null) {
+                                    selection =
+                                        if (shelf.book.id in current) {
+                                            (current - shelf.book.id)
+                                                .ifEmpty { null }
+                                        } else {
+                                            current + shelf.book.id
+                                        }
+                                } else {
+                                    quickActionsFor = shelf
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -3718,6 +4185,15 @@ private fun EditorialLibraryContent(
                             },
                             contentPadding = barButtonPadding
                         ) { Text("Download", maxLines = 1) }
+                        // Gap 15: bulk Delete downloads — the
+                        // same bulkDeleteDownloads path the
+                        // Nocturne bar calls.
+                        androidx.compose.material3.FilledTonalButton(
+                            onClick = {
+                                viewModel.bulkDeleteDownloads(picked)
+                            },
+                            contentPadding = barButtonPadding
+                        ) { Text("Delete downloads", maxLines = 1) }
                         androidx.compose.material3.FilledTonalButton(
                             onClick = { bulkStatusOpen = true },
                             contentPadding = barButtonPadding
@@ -3801,6 +4277,121 @@ private fun EditorialLibraryContent(
                 }
             }
         )
+    }
+    // Gap 14: the long-press quick-actions sheet — the full
+    // Nocturne action set in M3 language (ModalBottomSheet +
+    // ListItem rows): Open, Favourite, Add to shelf, Select,
+    // Remove from the current user shelf, Download book,
+    // Delete downloads, Set status…, Remove from library…
+    // Multi-select stays fully reachable: the Select row
+    // enters it here, and a long-press while a selection is
+    // active toggles membership as before.
+    quickActionsFor?.let { target ->
+        val isFavourite = target.book.id in state.favourites
+        ModalBottomSheet(
+            onDismissRequest = { quickActionsFor = null },
+            sheetState = rememberModalBottomSheetState(
+                skipPartiallyExpanded = true
+            )
+        ) {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(bottom = 24.dp)
+            ) {
+                Text(
+                    target.book.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(
+                        horizontal = 8.dp, vertical = 8.dp
+                    )
+                )
+                EditorialQuickActionRow(
+                    icon = Icons.Filled.MenuBook,
+                    label = "Open"
+                ) {
+                    quickActionsFor = null
+                    viewModel.markSeen(target.book.id)
+                    onOpenBook(target.book.id)
+                }
+                EditorialQuickActionRow(
+                    icon = if (isFavourite) {
+                        Icons.Filled.Favorite
+                    } else {
+                        Icons.Filled.FavoriteBorder
+                    },
+                    label = if (isFavourite) {
+                        "Remove from favourites"
+                    } else {
+                        "Favourite"
+                    }
+                ) {
+                    viewModel.setFavourite(target.book.id, !isFavourite)
+                    quickActionsFor = null
+                }
+                EditorialQuickActionRow(
+                    icon = Icons.Filled.PlaylistAdd,
+                    label = "Add to shelf"
+                ) {
+                    shelfPickerFor = setOf(target.book.id)
+                    quickActionsFor = null
+                }
+                EditorialQuickActionRow(
+                    icon = Icons.Filled.CheckBox,
+                    label = "Select"
+                ) {
+                    selection = setOf(target.book.id)
+                    quickActionsFor = null
+                }
+                selectedUserShelf?.takeIf {
+                    it.kind == app.xreader.data.db.ShelfKind.MANUAL
+                }?.let { shelf ->
+                    EditorialQuickActionRow(
+                        icon = Icons.Filled.PlaylistRemove,
+                        label = "Remove from “${shelf.name}”"
+                    ) {
+                        viewModel.removeBookFromShelf(
+                            target.book.id, shelf.id
+                        )
+                        quickActionsFor = null
+                    }
+                }
+                EditorialQuickActionRow(
+                    icon = Icons.Filled.Download,
+                    label = "Download book"
+                ) {
+                    viewModel.bulkDownload(listOf(target.book.id))
+                    quickActionsFor = null
+                }
+                EditorialQuickActionRow(
+                    icon = Icons.Filled.DeleteSweep,
+                    label = "Delete downloads"
+                ) {
+                    viewModel.bulkDeleteDownloads(
+                        listOf(target.book.id)
+                    )
+                    quickActionsFor = null
+                }
+                EditorialQuickActionRow(
+                    icon = Icons.Filled.Edit,
+                    label = "Set status…"
+                ) {
+                    statusDialogFor = target
+                    quickActionsFor = null
+                }
+                EditorialQuickActionRow(
+                    icon = Icons.Filled.RemoveCircleOutline,
+                    label = "Remove from library…",
+                    destructive = true
+                ) {
+                    removeTarget = target
+                    quickActionsFor = null
+                }
+            }
+        }
     }
     // S5's one delete sheet, shared with every design.
     app.xreader.ui.common.BookDeleteDialogs(
@@ -4071,16 +4662,59 @@ private fun EditorialLibraryContent(
                         onCheckedChange = { favouritesOnly = it }
                     )
                 }
+                // Gap 18: the Not started flag, as in
+                // Nocturne's filter sheet.
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Not started only")
+                        Text(
+                            "Only books you haven't started reading.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = notStartedOnly,
+                        onCheckedChange = { notStartedOnly = it }
+                    )
+                }
                 HorizontalDivider(
                     Modifier.padding(vertical = 8.dp),
                     color = scheme.outlineVariant
                 )
-                TextButton(
-                    onClick = {
+                // Gap 17: the New chapters door carries its
+                // live total, as Nocturne's filter sheet does.
+                val newChapterCounts = state.metas.values
+                    .mapNotNull {
+                        it.newChapterCount.takeIf { n -> n > 0 }
+                    }
+                androidx.compose.material3.ListItem(
+                    headlineContent = { Text("New chapters") },
+                    supportingContent = {
+                        Text(
+                            if (newChapterCounts.isNotEmpty()) {
+                                "${newChapterCounts.sum()} new across " +
+                                    "${newChapterCounts.size} book(s)"
+                            } else {
+                                "Nothing new right now"
+                            }
+                        )
+                    },
+                    leadingContent = {
+                        Icon(
+                            Icons.Filled.NewReleases,
+                            contentDescription = null,
+                            tint = scheme.primary
+                        )
+                    },
+                    modifier = Modifier.clickable {
                         sheetOpen = false
                         onOpenUpdates()
                     }
-                ) { Text("New chapters") }
+                )
                 TextButton(
                     onClick = { viewModel.checkForUpdates() }
                 ) {
@@ -4137,7 +4771,8 @@ private fun EditorialContinueCard(
     lead: Boolean,
     cardWidth: androidx.compose.ui.unit.Dp,
     coverFile: (String?) -> File?,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    coverGlow: Boolean = false
 ) {
     val scheme = MaterialTheme.colorScheme
     val pct = (shelf.fraction * 100).toInt()
@@ -4161,10 +4796,16 @@ private fun EditorialContinueCard(
             if (continuePressed) 36.dp else 28.dp,
             label = "editorialContinueCardMorph"
         )
+    // Patch B (gap 61): the glow rides behind the card —
+    // drawn before the clip, like Nocturne's poster card, so
+    // the bloom escapes the card's corners.
+    val continueGlow = rememberShelfGlowColor(shelf.book.title)
+        .takeIf { coverGlow }
     Box(
         Modifier
             .width(cardWidth)
             .height(250.dp)
+            .editorialCoverGlow(continueGlow)
             .clip(RoundedCornerShape(continueCorner))
             .background(scheme.surfaceContainerHigh)
             .clickable(
@@ -4256,6 +4897,183 @@ private fun EditorialContinueCard(
     }
 }
 
+/** Gap 14: one row of the Editorial quick-actions sheet —
+ * a stock M3 ListItem (leading icon, headline), error-roled
+ * when destructive. */
+@Composable
+private fun EditorialQuickActionRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    destructive: Boolean = false,
+    onClick: () -> Unit
+) {
+    val scheme = MaterialTheme.colorScheme
+    androidx.compose.material3.ListItem(
+        headlineContent = {
+            Text(
+                label,
+                color = if (destructive) scheme.error else scheme.onSurface
+            )
+        },
+        leadingContent = {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (destructive) {
+                    scheme.error
+                } else {
+                    scheme.onSurfaceVariant
+                }
+            )
+        },
+        modifier = Modifier.clickable { onClick() }
+    )
+}
+
+/** Gap 20: one book in the Editorial list layouts
+ * (COMFORTABLE_LIST / COMPACT_LIST) — an M3 card row: cover
+ * thumb, title, author, the gap-19 meta line, and the
+ * badge cluster (Fav / +N / %) at the end. */
+@Composable
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
+private fun EditorialListRow(
+    shelf: ShelfBook,
+    favourite: Boolean,
+    selected: Boolean = false,
+    newChapters: Int = 0,
+    showBadges: Boolean = true,
+    metaLine: String = "",
+    compact: Boolean = false,
+    coverFile: (String?) -> File?,
+    onClick: () -> Unit,
+    onLongPress: () -> Unit = {},
+    coverGlow: Boolean = false
+) {
+    val scheme = MaterialTheme.colorScheme
+    val pct = (shelf.fraction * 100).toInt()
+    val shape = RoundedCornerShape(if (compact) 16.dp else 24.dp)
+    Surface(
+        color = scheme.surfaceContainerLow,
+        shape = shape,
+        shadowElevation = 2.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
+            .then(
+                if (selected) {
+                    Modifier.border(2.dp, scheme.primary, shape)
+                } else {
+                    Modifier
+                }
+            )
+    ) {
+        Row(
+            Modifier.padding(if (compact) 6.dp else 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                Modifier
+                    // Patch B (gap 61): the row's glow blooms
+                    // behind its cover thumb (drawn before the
+                    // clip, as on the poster card).
+                    .editorialCoverGlow(
+                        rememberShelfGlowColor(shelf.book.title)
+                            .takeIf { coverGlow }
+                    )
+                    .size(
+                        width = if (compact) 32.dp else 44.dp,
+                        height = if (compact) 45.dp else 62.dp
+                    )
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(scheme.surfaceContainerHigh)
+            ) {
+                EditorialCoverImage(
+                    shelf = shelf,
+                    coverFile = coverFile,
+                    modifier = Modifier.fillMaxSize()
+                )
+                if (selected) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(3.dp)
+                            .size(18.dp)
+                            .clip(
+                                androidx.compose.foundation.shape.CircleShape
+                            )
+                            .background(scheme.primary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = "Selected",
+                            tint = scheme.onPrimary,
+                            modifier = Modifier.size(12.dp)
+                        )
+                    }
+                }
+            }
+            Column(
+                Modifier
+                    .weight(1f)
+                    .padding(start = 12.dp)
+            ) {
+                Text(
+                    shelf.book.title,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (shelf.book.author.isNotBlank()) {
+                    Text(
+                        shelf.book.author,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (metaLine.isNotBlank()) {
+                    Text(
+                        metaLine,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(start = 8.dp)
+            ) {
+                if (favourite) {
+                    Icon(
+                        Icons.Filled.Favorite,
+                        contentDescription = "Favourite",
+                        tint = scheme.tertiary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+                if (showBadges && newChapters > 0) {
+                    EditorialPill("+$newChapters")
+                }
+                if (showBadges && shelf.fraction > 0f) {
+                    Text(
+                        "$pct%",
+                        style = MaterialTheme.typography.labelSmall
+                            .copy(fontWeight = FontWeight.Bold),
+                        color = scheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+    }
+}
+
 /** The copy's grid card: 24dp card on surface-container-low,
  * the 3:4 cover full-bleed, the ♥ Fav badge, the ⋮ button,
  * the progress chip on every card, title + author below. */
@@ -4265,13 +5083,17 @@ private fun EditorialGridCard(
     shelf: ShelfBook,
     favourite: Boolean,
     selected: Boolean = false,
+    newChapters: Int = 0,
+    showBadges: Boolean = true,
+    metaLine: String = "",
     coverFile: (String?) -> File?,
     onClick: () -> Unit,
     onLongPress: () -> Unit = {},
     onToggleFavourite: () -> Unit,
     onSetStatus: () -> Unit,
     onRemove: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    coverGlow: Boolean = false
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val scheme = MaterialTheme.colorScheme
@@ -4291,11 +5113,17 @@ private fun EditorialGridCard(
             label = "editorialGridCardMorph"
         )
     val cardShape = RoundedCornerShape(cardCorner)
+    // Patch B (gap 61): the glow blooms behind the card —
+    // the caller's modifier (weight) stays outermost, the
+    // bloom draws behind the Surface's own fill.
+    val gridGlow = rememberShelfGlowColor(shelf.book.title)
+        .takeIf { coverGlow }
     Surface(
         color = scheme.surfaceContainerLow,
         shape = cardShape,
         shadowElevation = 2.dp,
         modifier = modifier
+            .editorialCoverGlow(gridGlow)
             .combinedClickable(
                 interactionSource = cardInteraction,
                 indication = androidx.compose.material3.ripple(),
@@ -4419,22 +5247,37 @@ private fun EditorialGridCard(
                         )
                     }
                 }
-                Box(
-                    Modifier
-                        .align(Alignment.BottomStart)
-                        .padding(8.dp)
-                        .clip(
-                            androidx.compose.foundation.shape.CircleShape
+                // Gap 17: the "+N" new-chapters badge, under
+                // the ⋮ button (which owns the top-end corner
+                // in this face), gated by showBadges at the
+                // caller and here.
+                if (showBadges && newChapters > 0) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(top = 44.dp, end = 6.dp)
+                    ) {
+                        EditorialPill("+$newChapters")
+                    }
+                }
+                if (showBadges) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .padding(8.dp)
+                            .clip(
+                                androidx.compose.foundation.shape.CircleShape
+                            )
+                            .background(scheme.surface.copy(alpha = 0.9f))
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            "$pct%",
+                            style = MaterialTheme.typography.labelSmall
+                                .copy(fontWeight = FontWeight.Bold),
+                            color = scheme.onSurface
                         )
-                        .background(scheme.surface.copy(alpha = 0.9f))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        "$pct%",
-                        style = MaterialTheme.typography.labelSmall
-                            .copy(fontWeight = FontWeight.Bold),
-                        color = scheme.onSurface
-                    )
+                    }
                 }
                 if (selected) {
                     Box(
@@ -4478,6 +5321,19 @@ private fun EditorialGridCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
+            // Gap 19: the meta line under the author —
+            // chapters · downloaded · unread.
+            if (metaLine.isNotBlank()) {
+                Text(
+                    metaLine,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 11.sp
+                    ),
+                    color = scheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }

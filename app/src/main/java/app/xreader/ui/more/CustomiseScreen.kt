@@ -132,6 +132,17 @@ import uy.kohesive.injekt.api.get
 class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 
     data class UiState(
+        /** Patch B (B2, settings flash): false only in the
+         * stateIn initial value — the combine below sets it
+         * true on its FIRST real emission, which is the first
+         * moment the persisted design (and every other pref)
+         * is actually known. CustomiseScreen composes NEITHER
+         * face until this is true: the old initial value
+         * carried DesignState()'s NOCTURNE default, so an M3
+         * session opening Settings composed the Nocturne hub
+         * for the frames until DataStore answered — the
+         * owner's "Nocturne settings briefly flashes". */
+        val loaded: Boolean = false,
         val appearance: AppearanceState = AppearanceState(),
         val library: LibraryState = LibraryState(),
         val reader: ReaderConfig = ReaderConfig(),
@@ -193,6 +204,7 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
     ) { values ->
         @Suppress("UNCHECKED_CAST")
         UiState(
+            loaded = true,
             appearance = values[0] as AppearanceState,
             library = values[1] as LibraryState,
             reader = values[2] as ReaderConfig,
@@ -857,6 +869,26 @@ class CustomiseViewModel(private val container: AppContainer) : ViewModel() {
 @Composable
 fun CustomiseScreen(viewModel: CustomiseViewModel, onBack: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Patch B (B2, settings flash): until the first real
+    // emission lands, the persisted design is NOT known —
+    // the stateIn initial value defaults to Nocturne, and
+    // branching on it composed the Nocturne hub inside an
+    // M3 session for a frame or two (the owner's video).
+    // Neither face composes here: a neutral frame in the
+    // ACTIVE theme's background (the theme above this route
+    // is fed by the shell's long-lived design collector,
+    // resolved long before the user can tap Settings) until
+    // the value is known. A Nocturne session pays no new
+    // delay beyond that same first emission — its hub is
+    // the first thing composed once [UiState.loaded] flips.
+    if (!state.loaded) {
+        Box(
+            Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+        )
+        return
+    }
     val appearance = state.appearance
     val library = state.library
     val reader = state.reader

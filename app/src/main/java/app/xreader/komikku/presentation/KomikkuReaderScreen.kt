@@ -80,6 +80,7 @@ import app.xreader.komikku.KomikkuReaderViewModel
 import app.xreader.komikku.model.ReaderPage
 import app.xreader.komikku.presentation.settings.ReaderSettingsDialog
 import app.xreader.komikku.presentation.settings.ReaderSettingsSheet
+import app.xreader.komikku.setting.ReaderBottomButton
 import app.xreader.komikku.setting.ReaderOrientation
 import app.xreader.komikku.setting.ReaderPreferences
 import app.xreader.komikku.setting.ReadingMode
@@ -517,7 +518,13 @@ fun KomikkuReaderScreen(
                     onBack = onBack,
                     onToggleBookmark = {
                         currentChapterId?.let { viewModel.toggleChapterBookmark(it) }
-                    }
+                    },
+                    // Patch B / B3: the reading mode is named
+                    // in the top bar's chip (ReadingMode.label,
+                    // the Nocturne chrome's own naming) — the
+                    // floating orphan label below is Nocturne-only.
+                    readingModeLabel = state.readingMode.label,
+                    showReadingMode = showReadingMode
                 )
             } else {
                 ReaderTopBar(
@@ -544,9 +551,10 @@ fun KomikkuReaderScreen(
             .collectAsState(initial = false)
         val isLandscape = configuration.orientation ==
             android.content.res.Configuration.ORIENTATION_LANDSCAPE
-        // Under M3 the floating toolbar's slider serves every
-        // viewer (S13: pager and webtoon wear identical chrome),
-        // so the vertical scrubber is a Nocturne-form surface.
+        // Under M3 the bottom dock's slider serves every
+        // viewer (Patch B / B3: pager and webtoon wear identical
+        // chrome), so the vertical scrubber is a Nocturne-form
+        // surface (gap 27, deliberate).
         val useVerticalScrubber = !m3 && chromeVisible && isVerticalViewer &&
             !forceHorizontal && (!isLandscape || landscapeVertical)
         if (useVerticalScrubber) {
@@ -580,9 +588,9 @@ fun KomikkuReaderScreen(
             // area the owner's standing rule reserves.
             Column(Modifier.navigationBarsPadding()) {
               if (m3) {
-                // S13: the floating toolbar is the whole bottom
-                // chrome in this design (the tools strip rides
-                // above it when open, scheme-toned).
+                // Patch B / B3: the docked M3 surface is the
+                // whole bottom chrome in this design (the tools
+                // strip rides above it when open, scheme-toned).
                 if (exhVisible) {
                     M3ExhUtilsStrip(
                         autoScrollOn = autoScrollOn,
@@ -604,6 +612,10 @@ fun KomikkuReaderScreen(
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
+                val m3Buttons by prefs.readerBottomButtons().changes()
+                    .collectAsState(
+                        initial = ReaderBottomButton.BUTTONS_DEFAULTS
+                    )
                 M3MangaToolbar(
                     currentPage = state.currentPage,
                     totalPages = state.pageCount,
@@ -616,6 +628,31 @@ fun KomikkuReaderScreen(
                     onReadingMode = { modeSelectVisible = true },
                     onToggleExhUtils = { exhVisible = !exhVisible },
                     onSettings = { settingsVisible = true },
+                    // Patch B gap 25: Share chapter, under the
+                    // exact Nocturne condition (the user enabled
+                    // the Share bottom button), on the exact
+                    // Nocturne handler.
+                    showShare = ReaderBottomButton.Share.isIn(m3Buttons),
+                    onShare = {
+                        shareChapterLink(
+                            context, state.bookTitle,
+                            state.currentChapter?.title ?: ""
+                        )
+                    },
+                    // Patch B gap 24: Shift double pages, under
+                    // the exact Nocturne condition (a double-page
+                    // pager is active), on the exact Nocturne
+                    // PagerConfig toggle.
+                    showShiftDoublePages = !isWebtoon &&
+                        (pagerConfig?.doublePages == true),
+                    shiftDoublePagesActive =
+                        pagerConfig?.shiftDoublePage == true,
+                    onShiftDoublePages = {
+                        pagerConfig?.let {
+                            it.shiftDoublePage = !it.shiftDoublePage
+                            resubmitNonce++
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth()
                 )
               } else {
@@ -704,16 +741,18 @@ fun KomikkuReaderScreen(
               }
             }
         }
-        if (chromeVisible && showReadingMode) {
+        // Patch B / B3: this floating mode label is a
+        // Nocturne-form surface. In the M3 face the mode is
+        // named in the top bar's chip (M3MangaTopBar), so the
+        // orphaned floating word does not compose there.
+        if (!m3 && chromeVisible && showReadingMode) {
             Text(
                 state.readingMode.label,
                 color = Color.White.copy(alpha = 0.8f),
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    // Under M3 the label clears the floating
-                    // toolbar instead of sitting under it.
-                    .padding(start = 12.dp, bottom = if (m3) 84.dp else 4.dp)
+                    .padding(start = 12.dp, bottom = 4.dp)
             )
         }
     }

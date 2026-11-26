@@ -55,9 +55,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -133,6 +135,22 @@ fun WhatsNewRevealEditorial(
             themeMode = app.xreader.data.prefs.M3ThemeMode.LIGHT
         )
     }
+    // Patch B (B-6, B4c): a Dialog is its own Android
+    // WINDOW — its frame is sized by the window manager
+    // from the window's own display metrics, while its
+    // content composes under LocalDensity. The app's ONE
+    // size authority is the theme root's scaled density
+    // (XreaderTheme: Density(base, fontScale = appSize)).
+    // Capture it HERE, in the activity composition, and
+    // pin it inside the dialog, so this surface's content
+    // is measured by the app's density and never by
+    // whatever the dialog window's own view would seed —
+    // on the 2 GB phone (whose window/configuration
+    // metrics already diverge from the app's, the known
+    // app-wide layout failure) the unpinned dialog was
+    // the one update surface that could split-scale:
+    // frame from the window, content from elsewhere.
+    val hostDensity = LocalDensity.current
     Dialog(
         onDismissRequest = onFinish,
         properties = DialogProperties(
@@ -141,14 +159,16 @@ fun WhatsNewRevealEditorial(
             dismissOnClickOutside = false
         )
     ) {
-        app.xreader.ui.theme.EditorialThemeRoot(
-            design = previewState,
-            reduceMotion = false
-        ) {
-            EditorialRevealPager(
-                onTryDesign = onTryDesign,
-                onFinish = onFinish
-            )
+        CompositionLocalProvider(LocalDensity provides hostDensity) {
+            app.xreader.ui.theme.EditorialThemeRoot(
+                design = previewState,
+                reduceMotion = false
+            ) {
+                EditorialRevealPager(
+                    onTryDesign = onTryDesign,
+                    onFinish = onFinish
+                )
+            }
         }
     }
 }
@@ -576,6 +596,13 @@ fun WhatsNewShowcase(
     // full-bleed, Back dismisses (writing seen), no
     // click-outside dismiss. The pager inside wears the
     // active face (see WhatsNewShowcasePager).
+    // Patch B (B-6, B4c): the same density pin as the
+    // reveal above — the app's theme-scaled LocalDensity,
+    // captured in the activity composition, is re-provided
+    // inside this Dialog window so the showcase scales as
+    // one piece with the rest of the app (see the note in
+    // WhatsNewRevealEditorial).
+    val hostDensity = LocalDensity.current
     Dialog(
         onDismissRequest = onFinish,
         properties = DialogProperties(
@@ -584,12 +611,14 @@ fun WhatsNewShowcase(
             dismissOnClickOutside = false
         )
     ) {
-        WhatsNewShowcasePager(
-            designState = designState,
-            showDesignCard = showDesignCard,
-            onTryDesign = onTryDesign,
-            onFinish = onFinish
-        )
+        CompositionLocalProvider(LocalDensity provides hostDensity) {
+            WhatsNewShowcasePager(
+                designState = designState,
+                showDesignCard = showDesignCard,
+                onTryDesign = onTryDesign,
+                onFinish = onFinish
+            )
+        }
     }
 }
 

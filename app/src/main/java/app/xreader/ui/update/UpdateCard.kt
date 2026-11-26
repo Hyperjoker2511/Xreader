@@ -271,12 +271,23 @@ private fun PillProgress(fraction: Float?) {
 const val GENERIC_SUMMARY = "A new version of Xreader is ready."
 
 /**
- * S36 under Material 3: a filled card IN the content flow.
- * "Xreader vX is ready" + the version line, a button group
- * (the phase's primary action / Later), the download state
- * as WAVY progress in the card, and the install state as a
- * plain line. No scrim, no overlay, no glass — the host
- * (Library) simply lists it above Continue.
+ * S36 under Material 3, rebuilt Patch B (B-6, B4b): a
+ * filled card IN the content flow, drawn entirely in
+ * Material 3 language — an [androidx.compose.material3.ElevatedCard]
+ * in the scheme's surfaceContainer, the leading icon in a
+ * primaryContainer tonal disc, Expressive emphasized
+ * typography, the download state as the shared progress
+ * block (which renders the M3 wavy indicator in this
+ * face), and stock M3 buttons (filled primary via
+ * [UpdatePrimaryButton]'s M3 form, filled-tonal for
+ * Later/Hide, text for Cancel). No scrim, no overlay, no
+ * glass, no Nocturne atoms — the host (Library) simply
+ * lists it above Continue.
+ *
+ * Patch B gap 67: the card carries the SAME information
+ * as Nocturne's — the "What's new" summary bullets and
+ * the "From GitHub Releases · tag" provenance line are
+ * on the card itself, not only behind "Read more".
  */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -293,101 +304,143 @@ private fun UpdateCardM3(
     val release = state.cardRelease ?: return
     val scheme = MaterialTheme.colorScheme
     val downloading = state.download is UpdateDownloadPhase.Running
-    androidx.compose.material3.Card(
-        shape = MaterialTheme.shapes.medium,
-        colors = androidx.compose.material3.CardDefaults.cardColors(
-            containerColor = scheme.surfaceContainer
-        ),
+    androidx.compose.material3.ElevatedCard(
+        shape = MaterialTheme.shapes.large,
+        colors = androidx.compose.material3.CardDefaults
+            .elevatedCardColors(
+                containerColor = scheme.surfaceContainer
+            ),
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
             Modifier.padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text(
-                "Xreader ${release.version} is ready",
-                style = MaterialTheme.typography.titleMediumEmphasized
-            )
-            val size = formatDownloadSize(release.apk.sizeBytes)
-            Text(
-                "You're on ${state.currentVersion}" +
-                    if (size.isNotEmpty()) " · $size" else "",
-                style = MaterialTheme.typography.bodyMedium,
-                color = scheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (downloading) {
-                val running =
-                    state.download as UpdateDownloadPhase.Running
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (running.fraction != null) {
-                        androidx.compose.material3
-                            .LinearWavyProgressIndicator(
-                                progress = { running.fraction },
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        Text(
-                            "${(running.fraction * 100).toInt()}% · " +
-                                "Downloading…",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant
-                        )
-                    } else {
-                        androidx.compose.material3
-                            .LinearWavyProgressIndicator(
-                                modifier = Modifier.fillMaxWidth()
-                            )
-                        Text(
-                            "Downloading…",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = scheme.onSurfaceVariant
-                        )
-                    }
-                }
-            } else {
-                UpdateProgressBlock(state.download)
-            }
-            androidx.compose.material3.ButtonGroup(
-                overflowIndicator = {},
-                modifier = Modifier.fillMaxWidth()
+            // ── Header: tonal icon disc + version + close ──
+            Row(
+                verticalAlignment = Alignment.Top,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                customItem(
-                    buttonGroupContent = {
-                        UpdatePrimaryButton(
-                            phase = state.download,
-                            onUpdateNow = onUpdateNow,
-                            onInstall = onInstall,
-                            onOpenInstallSettings =
-                                onOpenInstallSettings,
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    },
-                    menuContent = {}
-                )
-                customItem(
-                    buttonGroupContent = {
-                        androidx.compose.material3.FilledTonalButton(
-                            onClick = onDismiss,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(if (downloading) "Hide" else "Later")
-                        }
-                    },
-                    menuContent = {}
-                )
-                if (downloading) {
-                    customItem(
-                        buttonGroupContent = {
-                            TextButton(onClick = onCancelDownload) {
-                                Text("Cancel")
-                            }
-                        },
-                        menuContent = {}
+                Box(
+                    Modifier
+                        .size(44.dp)
+                        .background(
+                            scheme.primaryContainer,
+                            CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Filled.SystemUpdate,
+                        contentDescription = null,
+                        tint = scheme.onPrimaryContainer,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+                Column(
+                    Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        "Xreader ${release.version} is ready",
+                        style = MaterialTheme.typography
+                            .titleMediumEmphasized,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    val size = formatDownloadSize(release.apk.sizeBytes)
+                    Text(
+                        "You're on ${state.currentVersion}" +
+                            if (size.isNotEmpty()) " · $size" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = scheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(32.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = "Close",
+                        tint = scheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
                     )
                 }
             }
-            TextButton(onClick = onReadMore) { Text("Read more") }
+
+            // ── What's new: the gist, in the card (gap 67) ──
+            val summary = ReleaseParsing.shortSummary(release.body)
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    "What's new",
+                    style = MaterialTheme.typography.titleSmall
+                )
+                Column(
+                    Modifier
+                        .heightIn(max = 172.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    if (summary.isEmpty()) {
+                        Text(
+                            GENERIC_SUMMARY,
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    } else {
+                        summary.forEach { line ->
+                            Text(
+                                "• $line",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── Phase: the shared block — wavy progress in
+            // this face, plain-words states otherwise ──────
+            UpdateProgressBlock(state.download)
+
+            // ── Actions: filled primary + tonal Later/Hide ──
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                UpdatePrimaryButton(
+                    phase = state.download,
+                    onUpdateNow = onUpdateNow,
+                    onInstall = onInstall,
+                    onOpenInstallSettings = onOpenInstallSettings,
+                    modifier = Modifier.weight(1f)
+                )
+                androidx.compose.material3.FilledTonalButton(
+                    onClick = onDismiss
+                ) {
+                    Text(if (downloading) "Hide" else "Later")
+                }
+                if (downloading) {
+                    TextButton(onClick = onCancelDownload) {
+                        Text("Cancel")
+                    }
+                }
+            }
+
+            // ── Read more + the provenance line (gap 67) ───
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onReadMore) { Text("Read more") }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "From GitHub Releases · ${release.tagName}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = scheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
     }
 }

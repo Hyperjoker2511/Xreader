@@ -1473,6 +1473,43 @@ private fun EditorialProfilePage(
             Modifier.padding(horizontal = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Patch B (gap 64): the ViewModel's message,
+            // rendered as Nocturne renders it — a dismissible
+            // banner at the top of the page (this page never
+            // read state.message before). M3 form: a tonal
+            // card with the message and its OK door, wired
+            // to the same dismissMessage().
+            state.message?.let { message ->
+                Surface(
+                    color = colors.surfaceContainerLow,
+                    shape = RoundedCornerShape(24.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp)
+                ) {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = 18.dp, end = 8.dp,
+                                top = 8.dp, bottom = 8.dp
+                            ),
+                        horizontalArrangement =
+                            Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            message,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.primary,
+                            modifier = Modifier.weight(1f)
+                        )
+                        androidx.compose.material3.TextButton(
+                            onClick = { viewModel.dismissMessage() }
+                        ) { Text("OK") }
+                    }
+                }
+            }
             // Avatar colour (no-photo state only — F2).
             if (profile.avatarPath == null) {
                 Column(Modifier.padding(top = 16.dp)) {
@@ -1573,6 +1610,15 @@ private fun EditorialProfilePage(
                             "${state.progress.intoLevel} of " +
                                 "${state.progress.spanToNext} EXP in " +
                                 "this level",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant
+                        )
+                        // Patch B (gap 63): Nocturne's level
+                        // card carries the lifetime figure —
+                        // the same total, in this card's form.
+                        Text(
+                            "${formatNumber(profile.totalExp)} " +
+                                "EXP in total",
                             style = MaterialTheme.typography.bodySmall,
                             color = colors.onSurfaceVariant
                         )

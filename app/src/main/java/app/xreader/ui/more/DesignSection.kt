@@ -86,6 +86,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.OutlinedCard
+import androidx.compose.material3.OutlinedTextField
+import app.xreader.ui.theme.ReaderPalettes
+import app.xreader.ui.theme.maxContrast
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
@@ -273,7 +276,7 @@ private fun DesignSwitch(
 
 // ────────────────────────────────────────────────────────────────
 // Code 122 (Settings V2 — owner's pick: Option B, the DOOR HUB):
-// Customise under Material 3 is a dashboard of eleven door
+// Customise under Material 3 is a dashboard of twelve door
 // cards and NOTHING else — zero controls on the root. Each door
 // carries a LIVE state summary read from the same prefs/state
 // this page always read (live values in primary), and opens its
@@ -314,6 +317,11 @@ fun M3CustomisePage(
     BackHandler(enabled = openDoor != null) { openDoor = null }
     val doorTitles = mapOf(
         "design" to "Design",
+        // Patch B (gaps 56/57): Navigation gets its own door
+        // in this hub — Start screen, tab labels (incl.
+        // Icons only) and the nav-form knob live here, the
+        // M3 counterparts of Nocturne's Navigation page.
+        "navigation" to "Navigation",
         "library" to "Library",
         "reader" to "Reader",
         "manga" to "Manga reader",
@@ -342,7 +350,7 @@ fun M3CustomisePage(
         // Code 124 (audit D16): the terminal padding repays
         // the shell's dock clearance — under the Material 3
         // design's floating pill every branch of this page
-        // (the hub and all eleven focused pages share this one
+        // (the hub and all twelve focused pages share this one
         // scroll column) trapped its tail 16dp short of the
         // pill. One fix point, every branch.
         val dockClearance = app.xreader.ui.theme.LocalDockClearance.current
@@ -358,7 +366,7 @@ fun M3CustomisePage(
         ) {
             when (openDoor) {
                 null -> {
-                    // ── THE HUB: eleven doors, zero controls ──
+                    // ── THE HUB: twelve doors, zero controls ──
                     Text(
                         "One door per group. Each door says how " +
                             "things stand right now — nothing is " +
@@ -371,7 +379,7 @@ fun M3CustomisePage(
                     )
                     M3DoorCard(
                         groupIndex = 0,
-                        groupCount = 11,
+                        groupCount = 12,
                         icon = Icons.Filled.Palette,
                         title = "Design",
                         summary = m3DoorSummary(
@@ -399,7 +407,31 @@ fun M3CustomisePage(
                     )
                     M3DoorCard(
                         groupIndex = 1,
-                        groupCount = 11,
+                        groupCount = 12,
+                        icon = Icons.Filled.Explore,
+                        title = "Navigation",
+                        summary = m3DoorSummary(
+                            "Start screen: " to false,
+                            when (library.startScreen) {
+                                app.xreader.data.library.StartScreen
+                                    .LIBRARY -> "Library"
+                                app.xreader.data.library.StartScreen
+                                    .CONTINUE_READING -> "Continue reading"
+                                app.xreader.data.library.StartScreen
+                                    .DOWNLOADS -> "Downloads"
+                            } to true,
+                            " · Labels: " to false,
+                            when (design.tabLabels) {
+                                M3TabLabels.ALWAYS -> "Always"
+                                M3TabLabels.SELECTED_ONLY -> "Selected only"
+                                M3TabLabels.ICONS_ONLY -> "Icons only"
+                            } to true
+                        ),
+                        onClick = { openDoor = "navigation" }
+                    )
+                    M3DoorCard(
+                        groupIndex = 2,
+                        groupCount = 12,
                         icon = Icons.Filled.LibraryBooks,
                         title = "Library",
                         summary = m3DoorSummary(
@@ -418,8 +450,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "library" }
                     )
                     M3DoorCard(
-                        groupIndex = 2,
-                        groupCount = 11,
+                        groupIndex = 3,
+                        groupCount = 12,
                         icon = Icons.AutoMirrored.Filled.MenuBook,
                         title = "Reader",
                         summary = m3DoorSummary(
@@ -435,8 +467,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "reader" }
                     )
                     M3DoorCard(
-                        groupIndex = 3,
-                        groupCount = 11,
+                        groupIndex = 4,
+                        groupCount = 12,
                         icon = Icons.Filled.AutoStories,
                         title = "Manga reader",
                         summary = m3DoorSummary(
@@ -452,8 +484,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "manga" }
                     )
                     M3DoorCard(
-                        groupIndex = 4,
-                        groupCount = 11,
+                        groupIndex = 5,
+                        groupCount = 12,
                         icon = Icons.Filled.Download,
                         title = "Downloads",
                         summary = m3DoorSummary(
@@ -469,8 +501,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "downloads" }
                     )
                     M3DoorCard(
-                        groupIndex = 5,
-                        groupCount = 11,
+                        groupIndex = 6,
+                        groupCount = 12,
                         icon = Icons.Filled.Explore,
                         title = "Explore",
                         summary = m3DoorSummary(
@@ -486,8 +518,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "explore" }
                     )
                     M3DoorCard(
-                        groupIndex = 6,
-                        groupCount = 11,
+                        groupIndex = 7,
+                        groupCount = 12,
                         icon = Icons.Filled.Speed,
                         title = "Performance",
                         summary = m3DoorSummary(
@@ -501,8 +533,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "performance" }
                     )
                     M3DoorCard(
-                        groupIndex = 7,
-                        groupCount = 11,
+                        groupIndex = 8,
+                        groupCount = 12,
                         icon = Icons.Filled.Accessibility,
                         title = "Accessibility & motion",
                         summary = m3DoorSummary(
@@ -519,8 +551,8 @@ fun M3CustomisePage(
                     )
                     val hubSizes = storage
                     M3DoorCard(
-                        groupIndex = 8,
-                        groupCount = 11,
+                        groupIndex = 9,
+                        groupCount = 12,
                         icon = Icons.Filled.Storage,
                         title = "Storage",
                         summary = if (hubSizes == null) {
@@ -538,8 +570,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "storage" }
                     )
                     M3DoorCard(
-                        groupIndex = 9,
-                        groupCount = 11,
+                        groupIndex = 10,
+                        groupCount = 12,
                         icon = Icons.Filled.Healing,
                         title = "Sources & repairs",
                         summary = if (repairCount > 0) {
@@ -562,8 +594,8 @@ fun M3CustomisePage(
                         onClick = { openDoor = "sources" }
                     )
                     M3DoorCard(
-                        groupIndex = 10,
-                        groupCount = 11,
+                        groupIndex = 11,
+                        groupCount = 12,
                         icon = Icons.Filled.Science,
                         title = "Advanced",
                         summary = m3DoorSummary(
@@ -689,15 +721,137 @@ fun M3CustomisePage(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(horizontal = 8.dp)
                     )
-                    M3SegmentedRow(
-                        label = "Navigation labels",
-                        options = listOf(
-                            M3TabLabels.ALWAYS to "Always",
-                            M3TabLabels.SELECTED_ONLY to "Selected only"
-                        ),
-                        selected = design.tabLabels,
-                        onPick = viewModel::setM3TabLabels
+                    // Patch B (gap 61): Book colours — the
+                    // same AppearancePrefs controls Nocturne's
+                    // Book colours page carries, over the same
+                    // setters. The Editorial surfaces consume
+                    // the scope (B-7 wiring): the book page
+                    // takes a cover-seeded content scheme when
+                    // the scope is not Off, the Library cards
+                    // draw the cover glow, and at
+                    // BOOK_PAGE_AND_READER the M3 reader
+                    // chrome takes the book's tint; coverGlow
+                    // also feeds PerformancePolicy in both
+                    // faces.
+                    Text(
+                        "Book colours",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(
+                            horizontal = 8.dp, vertical = 4.dp
+                        )
                     )
+                    M3GroupCard {
+                        M3SegmentedRow(
+                            label = "Book colours",
+                            options = listOf(
+                                app.xreader.data.prefs
+                                    .BookColoursScope.BOOK_PAGE_ONLY to
+                                    "Book page only",
+                                app.xreader.data.prefs
+                                    .BookColoursScope
+                                    .BOOK_PAGE_AND_READER to
+                                    "Book page + reader controls",
+                                app.xreader.data.prefs
+                                    .BookColoursScope.OFF to "Off"
+                            ),
+                            selected = appearance.bookColours,
+                            onPick = viewModel::setBookColours
+                        )
+                        Text(
+                            "Each book's cover can lend its " +
+                                "colours to the book page. The " +
+                                "reading page itself never " +
+                                "changes colour this way.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
+                        M3SwitchRow(
+                            label = "Cover glow in Library",
+                            description = "A soft bloom of each " +
+                                "cover's colour behind its card. " +
+                                "Off unless you turn it on; light " +
+                                "devices may skip it.",
+                            checked = appearance.coverGlow,
+                            onChange = viewModel::setCoverGlow
+                        )
+                    }
+                    // Patch B (gaps 56/57): the Navigation
+                    // labels row moved to the new Navigation
+                    // page below — one home per setting.
+                    Spacer(Modifier.height(16.dp))
+                }
+                "navigation" -> {
+                    // ── Navigation (Patch B, gaps 56/57) ──
+                    // Nocturne's Navigation page carries Start
+                    // screen + tab labels; this face's page
+                    // carries the same two over the SAME prefs
+                    // (LibraryPrefs.startScreen is honoured by
+                    // both faces' shells; M3TabLabels is this
+                    // face's own knob), plus the nav-form knob
+                    // whose setter previously had no UI caller
+                    // anywhere. Nocturne's 17-style indicator
+                    // picker and custom indicator colour are
+                    // NOT ported (deliberate — Nocturne dock
+                    // language).
+                    M3SettingsGroup("Navigation")
+                    M3GroupCard {
+                        M3SegmentedRow(
+                            label = "Start screen",
+                            options = listOf(
+                                app.xreader.data.library.StartScreen
+                                    .LIBRARY to "Library",
+                                app.xreader.data.library.StartScreen
+                                    .CONTINUE_READING to "Continue reading",
+                                app.xreader.data.library.StartScreen
+                                    .DOWNLOADS to "Downloads"
+                            ),
+                            selected = library.startScreen,
+                            onPick = viewModel::setStartScreen
+                        )
+                        Text(
+                            "Where the app opens. Continue reading " +
+                                "goes straight into the book you " +
+                                "read last.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
+                        M3SegmentedRow(
+                            label = "Navigation labels",
+                            options = listOf(
+                                M3TabLabels.ALWAYS to "Always",
+                                M3TabLabels.SELECTED_ONLY to
+                                    "Selected only",
+                                M3TabLabels.ICONS_ONLY to "Icons only"
+                            ),
+                            selected = design.tabLabels,
+                            onPick = viewModel::setM3TabLabels
+                        )
+                        M3SegmentedRow(
+                            label = "Navigation form",
+                            options = listOf(
+                                M3NavForm.AUTO to "Auto",
+                                M3NavForm.BAR to "Bar",
+                                M3NavForm.RAIL to "Rail"
+                            ),
+                            selected = design.navForm,
+                            onPick = viewModel::setM3NavForm
+                        )
+                        Text(
+                            "On wide screens: Auto follows the " +
+                                "width, Bar keeps the bottom bar, " +
+                                "Rail pins the side rail. A phone " +
+                                "always wears the floating pill.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
+                    }
                     Spacer(Modifier.height(16.dp))
                 }
                 "library" -> {
@@ -747,6 +901,17 @@ fun M3CustomisePage(
                     Spacer(Modifier.height(16.dp))
                 }
                 "reader" -> {
+                    // ── Reader (Patch B, gap 53) ─────────────
+                    // The FULL text-Reader page Nocturne's
+                    // Customise carries (CustomiseScreen.kt's
+                    // Reader page), ported control for control
+                    // over the same prefs — ReaderConfig via
+                    // viewModel.updateReader, TXT rules via the
+                    // TxtPrefs setters — rendered in this face's
+                    // list-doors language (group cards,
+                    // segmented rows, spec switches). Above the
+                    // port, this page's own three M3 knobs keep
+                    // their home at the top.
                     M3SettingsGroup("Reader")
                     M3GroupCard {
                         M3SegmentedRow(
@@ -770,6 +935,281 @@ fun M3CustomisePage(
                             description = "The chapter, progress and time-left line under the reader's seek bar.",
                             checked = design.readerPositionLine,
                             onChange = viewModel::setM3ReaderPositionLine
+                        )
+                    }
+                    Text(
+                        "Page themes",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(
+                            horizontal = 8.dp, vertical = 4.dp
+                        )
+                    )
+                    Text(
+                        "The preview is a real page in those colours.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 8.dp)
+                    )
+                    // The palette picker in M3 form: tonal
+                    // cards carrying a real page sample in the
+                    // palette's own colours; the picked card
+                    // takes the secondaryContainer fill + 2 dp
+                    // primary border of this page's design
+                    // cards. Same write as Nocturne:
+                    // reader.paletteName.
+                    Row(
+                        Modifier
+                            .horizontalScroll(rememberScrollState())
+                            .padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        ReaderPalettes.forEach { palette ->
+                            val effective =
+                                palette.maxContrast(reader.highContrastText)
+                            val selected =
+                                reader.paletteName == palette.name
+                            Column(
+                                horizontalAlignment =
+                                    Alignment.CenterHorizontally,
+                                verticalArrangement =
+                                    Arrangement.spacedBy(4.dp)
+                            ) {
+                                Card(
+                                    onClick = {
+                                        viewModel.updateReader {
+                                            it.copy(
+                                                paletteName = palette.name
+                                            )
+                                        }
+                                    },
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = effective.background
+                                    ),
+                                    border = if (selected) {
+                                        androidx.compose.foundation
+                                            .BorderStroke(
+                                                2.dp,
+                                                MaterialTheme.colorScheme
+                                                    .primary
+                                            )
+                                    } else {
+                                        androidx.compose.foundation
+                                            .BorderStroke(
+                                                1.dp,
+                                                MaterialTheme.colorScheme
+                                                    .outline
+                                            )
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.size(
+                                        width = 76.dp, height = 96.dp
+                                    )
+                                ) {
+                                    Column(
+                                        Modifier.padding(7.dp),
+                                        verticalArrangement =
+                                            Arrangement.spacedBy(2.dp)
+                                    ) {
+                                        Text(
+                                            "The gate opened at dawn.",
+                                            color = effective.text,
+                                            style = MaterialTheme
+                                                .typography.labelSmall,
+                                            maxLines = 3
+                                        )
+                                        Text(
+                                            "Chapter 12",
+                                            color = effective.muted,
+                                            style = MaterialTheme
+                                                .typography.labelSmall,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                                Text(
+                                    palette.name,
+                                    style = MaterialTheme
+                                        .typography.labelSmall,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primary
+                                    } else {
+                                        MaterialTheme.colorScheme
+                                            .onSurfaceVariant
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    M3GroupCard {
+                        M3SwitchRow(
+                            label = "High contrast text",
+                            description = "Makes the words as bright (or dark) as the page allows.",
+                            checked = reader.highContrastText,
+                            onChange = { value ->
+                                viewModel.updateReader {
+                                    it.copy(highContrastText = value)
+                                }
+                            }
+                        )
+                        M3SwitchRow(
+                            label = "Auto-scroll / auto page-turn",
+                            description = "Pages move on their own while you read. Any touch pauses it.",
+                            checked = reader.autoScrollEnabled,
+                            onChange = { value ->
+                                viewModel.updateReader {
+                                    it.copy(autoScrollEnabled = value)
+                                }
+                            }
+                        )
+                        M3SegmentedRow(
+                            label = "Tap zones",
+                            options = listOf(
+                                app.xreader.domain.reader.TapZoneLayout
+                                    .STANDARD to "Standard",
+                                app.xreader.domain.reader.TapZoneLayout
+                                    .REVERSED to "Reversed",
+                                app.xreader.domain.reader.TapZoneLayout
+                                    .NINE_ZONE to "Nine-zone",
+                                app.xreader.domain.reader.TapZoneLayout
+                                    .OFF to "Off"
+                            ),
+                            selected = reader.tapZoneLayout,
+                            onPick = { value ->
+                                viewModel.updateReader {
+                                    it.copy(tapZoneLayout = value)
+                                }
+                            }
+                        )
+                        M3SegmentedRow(
+                            label = "Page order",
+                            options = listOf(
+                                app.xreader.domain.reader.PagedDirection
+                                    .LTR to "Left to right",
+                                app.xreader.domain.reader.PagedDirection
+                                    .RTL to "Right to left"
+                            ),
+                            selected = reader.pagedDirection,
+                            onPick = { value ->
+                                viewModel.updateReader {
+                                    it.copy(pagedDirection = value)
+                                }
+                            }
+                        )
+                    }
+                    Text(
+                        "Footnotes",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(
+                            horizontal = 8.dp, vertical = 4.dp
+                        )
+                    )
+                    M3GroupCard {
+                        M3SwitchRow(
+                            label = "Show footnotes directly in chapter text",
+                            description = "EPUB footnotes appear in a small box at the end of the paragraph that refers to them. Changing this re-prepares each EPUB book once, the next time it opens.",
+                            checked = reader.footnotesInText,
+                            onChange = { value ->
+                                viewModel.updateReader {
+                                    it.copy(footnotesInText = value)
+                                }
+                            }
+                        )
+                    }
+                    Text(
+                        "TXT chapters",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(
+                            horizontal = 8.dp, vertical = 4.dp
+                        )
+                    )
+                    M3GroupCard {
+                        Text(
+                            "How plain-text (.txt) books find their " +
+                                "chapters. Changes apply the next " +
+                                "time a TXT book is imported, or " +
+                                "when you re-detect chapters from " +
+                                "a book's Contents.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme
+                                .onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp)
+                        )
+                        M3SwitchRow(
+                            label = "Use chapter title rules",
+                            description = "On: only the title rules below decide the chapters. Off: the app reads the book's shape instead — short heading lines, numbered lines and quoted titles.",
+                            checked = state.txt.tocRegMode,
+                            onChange = viewModel::setTxtTocRegMode
+                        )
+                        M3TxtRuleField(
+                            label = "English title rule",
+                            stored = state.txt.regexOverrides[
+                                app.xreader.data.prefs.TxtLanguage.EN
+                            ],
+                            builtIn = app.xreader.data.parse
+                                .TxtChapterRegex.DEFAULT_EN,
+                            onSave = { rule ->
+                                viewModel.setTxtRegexOverride(
+                                    app.xreader.data.prefs
+                                        .TxtLanguage.EN, rule
+                                )
+                            }
+                        )
+                        M3TxtRuleField(
+                            label = "Chinese / Japanese title rule",
+                            stored = state.txt.regexOverrides[
+                                app.xreader.data.prefs.TxtLanguage.CN
+                            ],
+                            builtIn = app.xreader.data.parse
+                                .TxtChapterRegex.DEFAULT_CN,
+                            onSave = { rule ->
+                                viewModel.setTxtRegexOverride(
+                                    app.xreader.data.prefs
+                                        .TxtLanguage.CN, rule
+                                )
+                            }
+                        )
+                        M3TxtRuleField(
+                            label = "Russian title rule",
+                            stored = state.txt.regexOverrides[
+                                app.xreader.data.prefs.TxtLanguage.RU
+                            ],
+                            builtIn = app.xreader.data.parse
+                                .TxtChapterRegex.DEFAULT_RU,
+                            onSave = { rule ->
+                                viewModel.setTxtRegexOverride(
+                                    app.xreader.data.prefs
+                                        .TxtLanguage.RU, rule
+                                )
+                            }
+                        )
+                        M3TxtRuleField(
+                            label = "Longest chapter title (characters)",
+                            stored = state.txt.maxTitleLength.toString(),
+                            builtIn = app.xreader.data.prefs.TxtPrefs
+                                .DEFAULT_MAX_TITLE_LENGTH.toString(),
+                            onSave = { value ->
+                                viewModel.setTxtMaxTitleLength(
+                                    value?.toIntOrNull()
+                                        ?: app.xreader.data.prefs
+                                            .TxtPrefs
+                                            .DEFAULT_MAX_TITLE_LENGTH
+                                )
+                            }
+                        )
+                        M3TxtRuleField(
+                            label = "Titles never end with these characters",
+                            stored = state.txt.titleBlacklist,
+                            builtIn = app.xreader.data.prefs.TxtPrefs
+                                .DEFAULT_TITLE_BLACKLIST,
+                            onSave = { value ->
+                                viewModel.setTxtTitleBlacklist(
+                                    value ?: app.xreader.data.prefs
+                                        .TxtPrefs.DEFAULT_TITLE_BLACKLIST
+                                )
+                            }
                         )
                     }
                     Spacer(Modifier.height(16.dp))
@@ -858,6 +1298,120 @@ fun M3CustomisePage(
                             onPick = viewModel::setM3MangaPageChip
                         )
                     }
+                    // Patch B (gap 55): the rest of
+                    // Nocturne's Reader-page manga controls —
+                    // webtoon zoom, side padding, page fit,
+                    // screen direction, tap-zone layout and
+                    // flip — over the same ReaderConfig prefs.
+                    Text(
+                        "Webtoon & pages",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                    M3GroupCard {
+                        M3SwitchRow(
+                            label = "Webtoon double-tap zoom",
+                            description = "In scrolling mode, double-tap a strip to zoom in; double-tap again to fit.",
+                            checked = reader.webtoonDoubleTapZoom,
+                            onChange = { value ->
+                                viewModel.updateReader {
+                                    it.copy(webtoonDoubleTapZoom = value)
+                                }
+                            }
+                        )
+                        M3SwitchRow(
+                            label = "Webtoon pinch zoom",
+                            description = "Two fingers spread or pinch to zoom the scrolling strip.",
+                            checked = reader.webtoonPinchZoom,
+                            onChange = { value ->
+                                viewModel.updateReader {
+                                    it.copy(webtoonPinchZoom = value)
+                                }
+                            }
+                        )
+                        M3SwitchRow(
+                            label = "Keep webtoon at reading size or larger",
+                            description = "Pinching can zoom in but never out past the fitted width.",
+                            checked = reader.webtoonDisableZoomOut,
+                            onChange = { value ->
+                                viewModel.updateReader {
+                                    it.copy(webtoonDisableZoomOut = value)
+                                }
+                            }
+                        )
+                        Column(
+                            Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                "Webtoon side padding: " +
+                                    "${reader.webtoonSidePadding}%",
+                                style = MaterialTheme.typography.bodyLarge
+                            )
+                            Slider(
+                                value = reader.webtoonSidePadding
+                                    .toFloat(),
+                                onValueChange = { value ->
+                                    viewModel.updateReader {
+                                        it.copy(
+                                            webtoonSidePadding =
+                                                value.toInt()
+                                        )
+                                    }
+                                },
+                                valueRange = 0f..25f,
+                                steps = 24
+                            )
+                        }
+                        M3SegmentedRow(
+                            label = "Page fit",
+                            options = app.xreader.domain.reader
+                                .MangaScaleType.entries
+                                .map { it to it.label },
+                            selected = reader.mangaScaleType,
+                            onPick = { value ->
+                                viewModel.updateReader {
+                                    it.copy(mangaScaleType = value)
+                                }
+                            }
+                        )
+                        M3SegmentedRow(
+                            label = "Manga screen direction",
+                            options = app.xreader.domain.reader
+                                .MangaOrientation.entries
+                                .map { it to it.label },
+                            selected = reader.mangaOrientation,
+                            onPick = { value ->
+                                viewModel.updateReader {
+                                    it.copy(mangaOrientation = value)
+                                }
+                            }
+                        )
+                        M3SegmentedRow(
+                            label = "Manga tap zones",
+                            options = app.xreader.domain.reader
+                                .MangaTapLayout.entries
+                                .map { it to it.label },
+                            selected = reader.mangaTapLayout,
+                            onPick = { value ->
+                                viewModel.updateReader {
+                                    it.copy(mangaTapLayout = value)
+                                }
+                            }
+                        )
+                        M3SegmentedRow(
+                            label = "Flip tap zones",
+                            options = app.xreader.domain.reader
+                                .TapInvert.entries
+                                .map { it to it.label },
+                            selected = reader.mangaTapInvert,
+                            onPick = { value ->
+                                viewModel.updateReader {
+                                    it.copy(mangaTapInvert = value)
+                                }
+                            }
+                        )
+                    }
                     Text(
                         "Colour filter",
                         style = MaterialTheme.typography.titleSmall,
@@ -895,6 +1449,60 @@ fun M3CustomisePage(
                                 }
                             }
                         )
+                        // Patch B (gap 55 completeness): the
+                        // tint choice Nocturne shows while the
+                        // tint is on — same four washes, same
+                        // stored ARGB pref.
+                        if (reader.mangaColorFilter) {
+                            M3SegmentedRow(
+                                label = "Tint",
+                                options = listOf(
+                                    0x33FFCC99L to "Sepia",
+                                    0x26FFB37EL to "Warm",
+                                    0x2699CCFFL to "Cool",
+                                    0x40000000L to "Dim"
+                                ),
+                                selected = reader.mangaColorFilterArgb,
+                                onPick = { value ->
+                                    viewModel.updateReader {
+                                        it.copy(
+                                            mangaColorFilterArgb = value
+                                        )
+                                    }
+                                }
+                            )
+                        }
+                    }
+                    // Patch B (gap 54): the Komikku manga
+                    // reader's GLOBAL defaults — the full set
+                    // Nocturne's Manga reader page embeds
+                    // (default reading mode, rotation, volume
+                    // keys + inverted, double-tap speed, skip
+                    // read/filtered/duplicate, preserve
+                    // position, continuous vertical tapping,
+                    // smart long-strip scale, instant retry,
+                    // aggressive loading, preload size, reader
+                    // threads, cache size, auto-scroll
+                    // interval, bottom-bar buttons). The shared
+                    // section is design-neutral stock M3
+                    // (Checkbox / FilterChip / Slider over
+                    // MaterialTheme — ReaderSettingsDialog.kt),
+                    // so it embeds as-is over the same
+                    // Injekt ReaderPreferences store; a series'
+                    // own in-reader choices still win for it.
+                    Text(
+                        "Defaults for all books",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(
+                            horizontal = 8.dp, vertical = 4.dp
+                        )
+                    )
+                    M3GroupCard {
+                        app.xreader.komikku.presentation.settings
+                            .KomikkuGlobalDefaultsSection(
+                                prefs = viewModel.komikkuGlobalPrefs
+                            )
                     }
                     Spacer(Modifier.height(16.dp))
                 }
@@ -1718,6 +2326,54 @@ private fun EditorialPresetRow(
                     }
                 )
             }
+        }
+    }
+}
+
+/**
+ * Patch B (gap 53): one editable TXT chapter rule in M3 form —
+ * the same contract as Nocturne's TxtRuleField (stored override
+ * or the built-in, Save writes only on a change, "Use built-in
+ * rule" clears the override, and a rule that can't be read
+ * falls back to the built-in at import time), rendered with
+ * this page's field + text buttons.
+ */
+@Composable
+private fun M3TxtRuleField(
+    label: String,
+    stored: String?,
+    builtIn: String,
+    onSave: (String?) -> Unit
+) {
+    val effective = stored ?: builtIn
+    var draft by remember(label, effective) { mutableStateOf(effective) }
+    Column(Modifier.padding(horizontal = 8.dp, vertical = 4.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyLarge)
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = false,
+            maxLines = 3
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(
+                onClick = { onSave(draft) },
+                enabled = draft != effective
+            ) { Text("Save") }
+            TextButton(
+                onClick = { onSave(null) },
+                enabled = stored != null
+            ) { Text("Use built-in rule") }
+        }
+        if (stored == null) {
+            Text(
+                "Using the built-in rule. If a saved rule can't " +
+                    "be read, the built-in is used instead — an " +
+                    "import never fails over a rule.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

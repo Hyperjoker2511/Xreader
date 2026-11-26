@@ -51,6 +51,7 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.input.KeyboardType
@@ -202,6 +203,99 @@ fun ReaderScreen(
         .collectAsStateWithLifecycle(
             initialValue = app.xreader.data.prefs.DesignState()
         )
+    // Patch B (gap 61): Book colours, reader-controls leg.
+    // The scope's promise (Customise copy, both faces): at
+    // "Book page + reader controls" the cover lends its
+    // colours to the reader's CONTROLS — "the reading page
+    // itself never changes colour this way". Before this
+    // wiring nothing in either face read the scope for the
+    // reader (the pref's only consumer was the shell's
+    // Library glow gate), so the M3 chrome below always wore
+    // the app scheme. Now: in the Material 3 face at that
+    // scope, the chrome subtree alone wears a scheme
+    // generated from this book's cover seed (MCU Content
+    // style — the book page leg's own machinery); the page
+    // surfaces are composed outside that subtree and keep
+    // the reader palette untouched. The seed comes from the
+    // shared cover-palette cache when the book page already
+    // loaded it, else from the same 48×48 extraction the
+    // book page runs (off the UI thread, cached the same
+    // way) — a book opened straight from Continue therefore
+    // tints too.
+    val readerAppearance by container.appearancePrefs.state
+        .collectAsStateWithLifecycle(
+            initialValue = app.xreader.data.prefs.AppearanceState()
+        )
+    val readerBookTint = readerAppearance.bookColours ==
+        app.xreader.data.prefs.BookColoursScope
+            .BOOK_PAGE_AND_READER &&
+        designState.design !=
+            app.xreader.data.prefs.AppDesign.NOCTURNE
+    var readerCoverSeed by remember(bookId) {
+        mutableStateOf<Int?>(null)
+    }
+    LaunchedEffect(bookId, readerBookTint) {
+        if (readerBookTint && readerCoverSeed == null) {
+            readerCoverSeed = kotlinx.coroutines.withContext(
+                kotlinx.coroutines.Dispatchers.Default
+            ) {
+                runCatching {
+                    val cached = container.coverPaletteCache
+                        .get(bookId.toString())
+                    val cachedSeed = cached?.ambient?.toArgb()
+                    if (cachedSeed != null) {
+                        cachedSeed
+                    } else {
+                        val bookRow = container.database
+                            .bookDao().getById(bookId)
+                        val cover = bookRow?.coverPath?.let {
+                            container.bookStorage.resolve(it)
+                        }
+                        if (cover != null && cover.exists()) {
+                            val bitmap = android.graphics
+                                .BitmapFactory
+                                .decodeFile(cover.path)
+                            val extracted = bitmap?.let { bmp ->
+                                val scaled = android.graphics
+                                    .Bitmap.createScaledBitmap(
+                                        bmp, 48, 48, true
+                                    )
+                                val pixels = IntArray(48 * 48)
+                                scaled.getPixels(
+                                    pixels, 0, 48, 0, 0, 48, 48
+                                )
+                                val palette = app.xreader
+                                    .ui.theme.CoverPaletteExtractor
+                                    .extract(pixels)
+                                container.coverPaletteCache.put(
+                                    bookId.toString(), palette
+                                )
+                                app.xreader.ui.theme.McuScheme
+                                    .coverSeedArgb(pixels)
+                                    ?: palette.ambient?.toArgb()
+                            }
+                            extracted ?: cached?.ambient?.toArgb()
+                        } else {
+                            null
+                        }
+                    }
+                }.getOrNull()
+            }
+        }
+    }
+    val readerDark = app.xreader.ui.theme.isDarkScheme()
+    val readerCoverScheme = remember(
+        readerCoverSeed, readerDark, readerBookTint
+    ) {
+        if (readerBookTint && readerCoverSeed != null) {
+            app.xreader.ui.theme.McuScheme.contentScheme(
+                readerCoverSeed!!, readerDark
+            )
+        } else {
+            null
+        }
+    }
+    val ambientScheme = MaterialTheme.colorScheme
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
     val allHighlights by viewModel.highlights.collectAsStateWithLifecycle()
     // v1.7 Patch 3: the prepared-EPUB surfaces — in-book
@@ -1495,6 +1589,17 @@ fun ReaderScreen(
         if (designState.design !=
             app.xreader.data.prefs.AppDesign.NOCTURNE
         ) {
+        // Patch B (gap 61): the chrome — and only the chrome —
+        // wears the book's cover scheme at the
+        // BOOK_PAGE_AND_READER scope (readerCoverScheme is
+        // null at every other scope, and the ambient scheme
+        // is re-provided unchanged, so the wrap is invisible
+        // then). The page surfaces live outside this subtree.
+        MaterialTheme(
+            colorScheme = readerCoverScheme ?: ambientScheme,
+            typography = MaterialTheme.typography,
+            shapes = MaterialTheme.shapes
+        ) {
         M3ReaderChromeBar(
             visible = chromeVisible,
             chromeStyle = designState.readerChrome,
@@ -1705,6 +1810,7 @@ fun ReaderScreen(
             onTopBarHeight = { px -> if (px > 0) topChromePx = px },
             onBottomBarHeight = { px -> if (px > 0) bottomChromePx = px }
         )
+        }
         } else {
         ReaderChrome(
             visible = chromeVisible,

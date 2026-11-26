@@ -477,6 +477,12 @@ fun OpdsCatalogScreen(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    // Patch B (gap 47): a working Retry — the
+                    // same OpdsViewModel.retry Nocturne's
+                    // ErrorState calls.
+                    Button(
+                        onClick = { viewModel.retry() }
+                    ) { Text("Retry") }
                     TextButton(onClick = onBack) { Text("Back") }
                 }
                 state.feed != null -> {

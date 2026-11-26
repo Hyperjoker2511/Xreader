@@ -81,8 +81,39 @@ class UpdateDownloadManager(
             }
             onDownloadStarted(release.version)
             onProgress(release.version, null)
+            // Patch B (B-6, B4a): defence in depth at this
+            // layer too — a progress report only becomes a
+            // state emission + notification post when the
+            // whole percent actually moved (or, for an
+            // unknown-length body, every 512 KiB). The HTTP
+            // layer already conflates (OkHttpUpdateHttp),
+            // but the manager owns the expensive consumers
+            // (StateFlow → every update surface recomposes;
+            // the onProgress hook → a notification IPC), so
+            // the bucket is enforced here as well: no
+            // [downloadAndVerify] implementation can flood
+            // them per chunk again. Reports are also kept
+            // monotonic — a stale report never moves the
+            // bar backwards.
+            var lastPercent = -1
+            var lastBytes = 0L
             val outcome = downloadAndVerify(release) { downloaded, total ->
                 if (!isActive) return@downloadAndVerify
+                if (downloaded < lastBytes) return@downloadAndVerify
+                val percent = if (total > 0) {
+                    ((downloaded * 100) / total).toInt()
+                } else {
+                    -1
+                }
+                val significant = if (total > 0) {
+                    percent != lastPercent
+                } else {
+                    downloaded - lastBytes >= 512L * 1024L ||
+                        lastBytes == 0L
+                }
+                if (!significant) return@downloadAndVerify
+                lastPercent = percent
+                lastBytes = downloaded
                 val fraction = if (total > 0) {
                     (downloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
                 } else {

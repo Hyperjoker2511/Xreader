@@ -96,7 +96,13 @@ internal fun M3WideBookCard(
     coverModel: Any?,
     inLibrary: Boolean,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Patch B (gap 31): the matched-text snippet for an
+     * inside-downloads hit ("…snippet…"), as Nocturne shows. */
+    snippet: String? = null,
+    /** Patch B (gap 32): an extra meta line under the author —
+     * the "On N sources" count for a search result. */
+    metaLine: String? = null
 ) {
     Card(
         onClick = onClick,
@@ -159,6 +165,24 @@ internal fun M3WideBookCard(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
+                    )
+                }
+                if (!snippet.isNullOrBlank()) {
+                    Text(
+                        "…$snippet…",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp)
+                    )
+                }
+                if (!metaLine.isNullOrBlank()) {
+                    Text(
+                        metaLine,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme
+                            .onSurfaceVariant,
+                        modifier = Modifier.padding(top = 2.dp)
                     )
                 }
                 if (inLibrary) {

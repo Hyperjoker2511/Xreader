@@ -298,9 +298,25 @@ private fun UpdateRow(
     }
 }
 
-/** R38 under Material 3: settings-list rows on the tonal
- * ladder — no glass cards. The update state, when a release
- * is ready, is S36's filled card in this page's flow too. */
+/**
+ * R38 under Material 3, rebuilt Patch B (B-6, B4b): a
+ * designed Material 3 settings page — a [androidx.compose.material3.Scaffold]
+ * with a stock TopAppBar, a filled status card in the
+ * scheme's surfaceContainer carrying the version state, the
+ * phase's primary action, and grouped [androidx.compose.material3.ListItem]
+ * rows (leading icons tinted primary, chevron trailing)
+ * under small section titles, divided by hairlines. No
+ * glass, no Nocturne atoms.
+ *
+ * Patch B gaps closed here: 65 — the "Update now" primary
+ * button is ALWAYS on the page, exactly as on the Nocturne
+ * form (with no release known it runs the check first and
+ * downloads what the check finds — AppUpdateViewModel's
+ * updateNow); the old M3 branch rendered it only once a
+ * release was already known. 66 — the Links group carries
+ * "Releases — every version", the door the Nocturne form
+ * has always had and this branch lacked.
+ */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun UpdatesAboutScreenM3(
@@ -320,43 +336,124 @@ private fun UpdatesAboutScreenM3(
             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
         }
     }
-    Column(
-        Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-    ) {
-        androidx.compose.material3.TopAppBar(
-            title = { Text("Updates & about") },
-            navigationIcon = {
-                IconButton(onClick = onBack) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.ArrowBack,
-                        contentDescription = "Back"
-                    )
+    val scheme = MaterialTheme.colorScheme
+    androidx.compose.material3.Scaffold(
+        topBar = {
+            androidx.compose.material3.TopAppBar(
+                title = { Text("Updates & about") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back"
+                        )
+                    }
                 }
-            }
-        )
+            )
+        }
+    ) { innerPadding ->
         Column(
-            Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            androidx.compose.material3.ListItem(
-                headlineContent = { Text("Check for updates") },
-                supportingContent = {
-                    Text(
-                        if (state.checking) {
-                            "Checking…"
-                        } else {
-                            "${state.statusLine} You're on " +
-                                "${state.currentVersion}."
-                        }
-                    )
+            // ── Status card: where this install stands ─────
+            androidx.compose.material3.Card(
+                shape = MaterialTheme.shapes.large,
+                colors = androidx.compose.material3.CardDefaults
+                    .cardColors(
+                        containerColor = scheme.surfaceContainer
+                    ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp, bottom = 4.dp)
+            ) {
+                Row(
+                    Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        Modifier
+                            .size(44.dp)
+                            .background(
+                                scheme.primaryContainer,
+                                RoundedCornerShape(50)
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.SystemUpdate,
+                            contentDescription = null,
+                            tint = scheme.onPrimaryContainer,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                    Column(
+                        Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            if (state.release != null) {
+                                "Version ${state.release.version} is ready"
+                            } else {
+                                "You're on ${state.currentVersion}"
+                            },
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                        Text(
+                            if (state.checking) {
+                                "Checking…"
+                            } else if (state.release != null) {
+                                "${state.statusLine} You're on " +
+                                    "${state.currentVersion}."
+                            } else {
+                                state.statusLine
+                            },
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = scheme.onSurfaceVariant
+                        )
+                    }
+                    if (state.checking) {
+                        CircularProgressIndicator(
+                            Modifier.size(24.dp),
+                            strokeWidth = 2.dp
+                        )
+                    }
+                }
+            }
+
+            // ── The journey: progress + the always-present
+            // primary action (gap 65). The progress block
+            // renders nothing while idle. ──────────────────
+            UpdateProgressBlock(
+                state.download,
+                modifier = Modifier.padding(top = 4.dp)
+            )
+            UpdatePrimaryButton(
+                phase = state.download,
+                onUpdateNow = onUpdateNow,
+                onInstall = onInstall,
+                onOpenInstallSettings = onOpenInstallSettings,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, bottom = 4.dp)
+            )
+
+            M3UpdateSectionTitle("Updates")
+            M3UpdateRow(
+                icon = Icons.Filled.Refresh,
+                title = "Check for updates",
+                subtitle = if (state.checking) {
+                    "Checking…"
+                } else {
+                    "Ask GitHub whether a newer version is out"
                 },
-                leadingContent = {
-                    Icon(Icons.Filled.Refresh, contentDescription = null)
-                },
-                trailingContent = {
+                onClick = if (state.checking) null else onCheckNow,
+                trailing = {
                     if (state.checking) {
                         CircularProgressIndicator(
                             Modifier.size(20.dp),
@@ -365,127 +462,141 @@ private fun UpdatesAboutScreenM3(
                     } else {
                         Chevron()
                     }
-                },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .then(
-                        if (state.checking) {
-                            Modifier
-                        } else {
-                            Modifier.clickable(onClick = onCheckNow)
-                        }
-                    )
+                }
             )
-            androidx.compose.material3.ListItem(
-                headlineContent = { Text("Check automatically") },
-                supportingContent = {
-                    Text("Once a day, when you open the app")
-                },
-                leadingContent = {
-                    Icon(
-                        Icons.Filled.SystemUpdate,
-                        contentDescription = null
-                    )
-                },
-                trailingContent = {
+            M3UpdateRow(
+                icon = Icons.Filled.SystemUpdate,
+                title = "Check automatically",
+                subtitle = "Once a day, when you open the app",
+                onClick = { onAutoCheckChange(!state.autoCheckEnabled) },
+                trailing = {
                     Switch(
                         checked = state.autoCheckEnabled,
                         onCheckedChange = onAutoCheckChange
                     )
                 }
             )
-            if (state.cardRelease != null || state.release != null) {
-                UpdateProgressBlock(state.download)
-                UpdatePrimaryButton(
-                    phase = state.download,
-                    onUpdateNow = onUpdateNow,
-                    onInstall = onInstall,
-                    onOpenInstallSettings = onOpenInstallSettings,
-                    modifier = Modifier.fillMaxWidth()
+            if (state.release != null) {
+                M3UpdateRow(
+                    icon = Icons.Filled.NewReleases,
+                    title = "What's new in ${state.release.version}",
+                    subtitle = "Read the release notes and update",
+                    onClick = onOpenWhatsNew,
+                    trailing = { Chevron() }
                 )
             }
+
             androidx.compose.material3.HorizontalDivider(
                 Modifier.padding(vertical = 8.dp)
             )
-            androidx.compose.material3.ListItem(
-                headlineContent = { Text("What's new") },
-                supportingContent = {
-                    Text(
-                        state.release?.let {
-                            "What's new in ${it.version}"
-                        } ?: "Release notes for this version"
-                    )
-                },
-                leadingContent = {
-                    Icon(
-                        Icons.Filled.NewReleases,
-                        contentDescription = null
-                    )
-                },
-                trailingContent = { Chevron() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenWhatsNew)
+            M3UpdateSectionTitle("Links")
+            M3UpdateRow(
+                icon = Icons.Filled.Code,
+                title = "GitHub page",
+                subtitle = "Xreader's home — source and releases",
+                onClick = { openUrl(AppUpdateRepository.REPO_URL) },
+                trailing = { Chevron() }
             )
-            androidx.compose.material3.ListItem(
-                headlineContent = { Text("About") },
-                supportingContent = {
-                    Text(
-                        "Version ${state.currentVersion} " +
-                            "(${state.currentVersionCode}) · MIT Licence"
-                    )
-                },
-                leadingContent = {
-                    Icon(Icons.Filled.Info, contentDescription = null)
-                },
-                trailingContent = { Chevron() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenAbout)
+            // Gap 66: the Releases door, Nocturne's wording.
+            M3UpdateRow(
+                icon = Icons.Filled.NewReleases,
+                title = "Releases",
+                subtitle = "Every version, to download by hand",
+                onClick = { openUrl(AppUpdateRepository.RELEASES_URL) },
+                trailing = { Chevron() }
             )
-            androidx.compose.material3.ListItem(
-                headlineContent = { Text("GitHub page") },
-                supportingContent = {
-                    Text("Xreader's home — source and releases")
-                },
-                leadingContent = {
-                    Icon(Icons.Filled.Code, contentDescription = null)
-                },
-                trailingContent = { Chevron() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        openUrl(
-                            app.xreader.data.update.AppUpdateRepository
-                                .REPO_URL
-                        )
-                    }
+            M3UpdateRow(
+                icon = Icons.Filled.PrivacyTip,
+                title = "Privacy",
+                subtitle = "What Xreader keeps on your device, in plain words",
+                onClick = { openUrl(AppUpdateRepository.PRIVACY_URL) },
+                trailing = { Chevron() }
             )
-            androidx.compose.material3.ListItem(
-                headlineContent = { Text("Privacy") },
-                supportingContent = {
-                    Text(
-                        "What Xreader keeps on your device, " +
-                            "in plain words"
-                    )
-                },
-                leadingContent = {
-                    Icon(
-                        Icons.Filled.PrivacyTip,
-                        contentDescription = null
-                    )
-                },
-                trailingContent = { Chevron() },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        openUrl(
-                            app.xreader.data.update.AppUpdateRepository
-                                .PRIVACY_URL
-                        )
-                    }
+
+            androidx.compose.material3.HorizontalDivider(
+                Modifier.padding(vertical = 8.dp)
             )
-            Spacer(Modifier.height(32.dp))
+            M3UpdateSectionTitle("About this app")
+            M3UpdateRow(
+                icon = Icons.Filled.Info,
+                title = "Version",
+                subtitle = "${state.currentVersion} (${state.currentVersionCode})",
+                onClick = null,
+                trailing = {}
+            )
+            M3UpdateRow(
+                icon = Icons.Filled.Description,
+                title = "Licence",
+                subtitle = "MIT Licence — and the libraries inside",
+                onClick = onOpenAbout,
+                trailing = { Chevron() }
+            )
+            M3UpdateRow(
+                icon = Icons.Filled.NewReleases,
+                title = "What's new",
+                subtitle = state.release?.let {
+                    "What's new in ${it.version}"
+                } ?: "Release notes for this version",
+                onClick = onOpenWhatsNew,
+                trailing = { Chevron() }
+            )
+            Spacer(
+                Modifier.height(
+                    effectiveBottomPadding(32.dp, LocalDockClearance.current)
+                )
+            )
         }
     }
+}
+
+/** Patch B (B-6): one section title on the M3 Updates &
+ * about page — the M3 settings idiom (small, primary,
+ * title case set in the scheme's own type). */
+@Composable
+private fun M3UpdateSectionTitle(title: String) {
+    Text(
+        title,
+        style = MaterialTheme.typography.titleSmall,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 4.dp, top = 8.dp, bottom = 2.dp)
+    )
+}
+
+/** Patch B (B-6): one row on the M3 Updates & about page —
+ * a stock M3 ListItem: primary-tinted leading icon, one
+ * headline, one supporting line, the caller's trailing
+ * piece; the whole row is the tap target when it has one. */
+@Composable
+private fun M3UpdateRow(
+    icon: ImageVector,
+    title: String,
+    subtitle: String,
+    onClick: (() -> Unit)?,
+    trailing: @Composable () -> Unit
+) {
+    androidx.compose.material3.ListItem(
+        headlineContent = {
+            Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
+        supportingContent = {
+            Text(subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        },
+        leadingContent = {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary
+            )
+        },
+        trailingContent = trailing,
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (onClick != null) {
+                    Modifier.clickable(onClick = onClick)
+                } else {
+                    Modifier
+                }
+            )
+    )
 }

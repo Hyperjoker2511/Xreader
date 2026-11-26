@@ -79,8 +79,13 @@ enum class M3ThemeMode { DARK, LIGHT, FOLLOW_SYSTEM }
  * and the user picks Reduced, on any device. */
 enum class M3MotionChoice { EXPRESSIVE, STANDARD, REDUCED }
 
-/** Tab label knob for the flexible bar (§2.11 Navigation). */
-enum class M3TabLabels { ALWAYS, SELECTED_ONLY }
+/** Tab label knob for the flexible bar (§2.11 Navigation).
+ * Patch B (gap 57): ICONS_ONLY joins the set — Nocturne's
+ * "Icons only" tab-label choice, carried into this face's
+ * own knob (the shells read it: rail items render no label,
+ * the Editorial pill's picked item loses its label). Stored
+ * values parse by name, so the addition is backward-safe. */
+enum class M3TabLabels { ALWAYS, SELECTED_ONLY, ICONS_ONLY }
 
 /** Bar/rail override (§2.11 Navigation): Auto follows the width
  * classes; Bar/Rail pin one form at every width. */

@@ -376,7 +376,8 @@ private fun M3SeekRow(
 /** The toolbar's action row — the same doors and gating as
  * the shipped chrome: Contents · Search · Listen · Ask AI
  * in the text world, the PDF page chip + Reflow toggle in
- * a PDF's world, then Focus · seek expand · Settings.
+ * a PDF's world, then Focus · seek expand · Settings. Focus
+ * rides in every world (Patch B gap 23), CBZ included.
  * Code 124 (A7 + the owner's feature-parity rule): Ask AI
  * is a visible chrome door here, as it is in Nocturne's
  * chrome — never in the overflow menu. (The 121 note that
@@ -423,7 +424,13 @@ private fun M3ChromeActions(
             Icon(Icons.Filled.Description, pdfModeLabel)
         }
     }
-    if (showFocusDoor && cbzPageLabel == null) {
+    // Patch B (gap 23): the Focus door shows in EVERY world,
+    // including the CBZ/CBR page world — Nocturne renders its
+    // Focus tile unconditionally, and the host's focus sheet
+    // (ReaderScreen's ActiveSheet.FOCUS) is format-agnostic.
+    // The text-only doors above (Contents · Search · Listen ·
+    // Ask AI) stay CBZ-gated; Focus is not one of them.
+    if (showFocusDoor) {
         IconButton(onClick = onOpenFocus) {
             Icon(Icons.Filled.Timer, "Focus timer")
         }

@@ -34,6 +34,9 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoStories
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FiberNew
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Refresh
@@ -62,6 +65,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -74,6 +78,7 @@ import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -93,6 +98,7 @@ import app.xreader.domain.reader.ChapterDisplayOrder
 import app.xreader.ui.theme.FrauncesSerif
 import java.io.File
 import kotlin.math.roundToInt
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 
 /**
@@ -110,6 +116,25 @@ import kotlinx.coroutines.launch
  * treatment. Every number and control is real; where the
  * design printed decoration, the app's truth stands in.
  */
+/**
+ * Patch B (gap 61): the Book colours scope, book-page leg.
+ * Nocturne's Customise copy is the semantics: "Each book's
+ * cover can lend its colours to the book page" — at
+ * BOOK_PAGE_ONLY and BOOK_PAGE_AND_READER the page takes the
+ * book-derived colour treatment; at OFF it never does. In
+ * this face the treatment is Material 3's own: a scheme
+ * generated from the cover's seed through the MCU Content
+ * style ([app.xreader.ui.theme.McuScheme.contentScheme] —
+ * the same machinery this design's colour picker and the
+ * retired cover-scheme branch of BookDetailTheme used),
+ * provided to this page's subtree alone, so the tonal band,
+ * cards and accents wear the book's colours and the app
+ * scheme resumes untouched on exit. The seed rides the
+ * shared VM palette load (coverSeedArgb, with the palette's
+ * ambient as the fallback seed — the VM's own cache-hit
+ * rule). No seed yet (or a cover that yields none) = the
+ * page wears the user's chosen colour, exactly as before.
+ */
 @Composable
 @OptIn(
     androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
@@ -117,6 +142,88 @@ import kotlinx.coroutines.launch
     androidx.compose.foundation.layout.ExperimentalLayoutApi::class
 )
 fun EditorialBookDetail(
+    state: BookDetailUiState,
+    localOutline: List<LocalOutline>,
+    viewModel: BookDetailViewModel,
+    container: app.xreader.di.AppContainer,
+    coverFile: (String?) -> File?,
+    onBack: () -> Unit,
+    onReadChapter: (chapterIndex: Int) -> Unit,
+    onReadLocalTarget: ((bookId: Long, targetJson: String) -> Unit)?,
+    onOpenLore: () -> Unit,
+    onOpenAiPage: (
+        chapterIndex: Int, chapterId: Long?, illustrate: Boolean
+    ) -> Unit = { _, _, _ -> },
+    onExportEpub: () -> Unit,
+    onExportCbz: () -> Unit,
+    onOpenTag: (String) -> Unit = {},
+    onOpenRelated: (Long) -> Unit = {},
+    onFindTitle: (String) -> Unit = {},
+    onOpenSourceDetails: (Long) -> Unit = {},
+    onSiteCheck: (Long) -> Unit = {},
+    onSessionHandoff: (
+        Long, app.xreader.data.extension.SessionNeed.Kind
+    ) -> Unit = { _, _ -> }
+) {
+    val appearance by container.appearancePrefs.state
+        .collectAsStateWithLifecycle(
+            initialValue = app.xreader.data.prefs.AppearanceState()
+        )
+    val bookColoursOn = appearance.bookColours !=
+        app.xreader.data.prefs.BookColoursScope.OFF
+    val coverSeed = state.coverSeedArgb
+        ?: state.coverPalette?.ambient?.toArgb()
+    val dark = app.xreader.ui.theme.isDarkScheme()
+    val coverScheme = remember(coverSeed, dark, bookColoursOn) {
+        if (bookColoursOn && coverSeed != null) {
+            app.xreader.ui.theme.McuScheme
+                .contentScheme(coverSeed, dark)
+        } else {
+            null
+        }
+    }
+    val page: @Composable () -> Unit = {
+        EditorialBookDetailContent(
+            state = state,
+            localOutline = localOutline,
+            viewModel = viewModel,
+            container = container,
+            coverFile = coverFile,
+            onBack = onBack,
+            onReadChapter = onReadChapter,
+            onReadLocalTarget = onReadLocalTarget,
+            onOpenLore = onOpenLore,
+            onOpenAiPage = onOpenAiPage,
+            onExportEpub = onExportEpub,
+            onExportCbz = onExportCbz,
+            onOpenTag = onOpenTag,
+            onOpenRelated = onOpenRelated,
+            onFindTitle = onFindTitle,
+            onOpenSourceDetails = onOpenSourceDetails,
+            onSiteCheck = onSiteCheck,
+            onSessionHandoff = onSessionHandoff
+        )
+    }
+    if (coverScheme != null) {
+        MaterialTheme(
+            colorScheme = coverScheme,
+            typography = MaterialTheme.typography,
+            shapes = MaterialTheme.shapes
+        ) {
+            page()
+        }
+    } else {
+        page()
+    }
+}
+
+@Composable
+@OptIn(
+    androidx.compose.material3.ExperimentalMaterial3ExpressiveApi::class,
+    androidx.compose.material3.ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
+private fun EditorialBookDetailContent(
     state: BookDetailUiState,
     localOutline: List<LocalOutline>,
     viewModel: BookDetailViewModel,
@@ -172,6 +279,26 @@ fun EditorialBookDetail(
     // D1 (re-check fix): the chapter-settings sheet's door
     // state — the shared page's sheet, this face's surface.
     var chapterSettingsOpen by remember { mutableStateOf(false) }
+    // Patch B (gap 3): the Download choices sheet's open
+    // state — Whole book / Next 10 / Up to latest unread,
+    // the shared page's three ranges.
+    var downloadSheetOpen by remember { mutableStateOf(false) }
+    // Patch B (gaps 4–5): the chapter list's own state —
+    // the jump scrolls this list, and its window + sentinel
+    // grow the rendered rows exactly as the shared page's
+    // list does (100 at a time, +200 at the sentinel).
+    val chapterListState =
+        androidx.compose.foundation.lazy.rememberLazyListState()
+    var chapterWindow by remember(
+        state.book?.id, chapterQuery, chapterStateFilter,
+        chapterPartFilter, newestFirst
+    ) { mutableStateOf(100) }
+    /** The chapter row a jump landed on (transient
+     * highlight, the current chapter's own treatment). */
+    var jumpTargetId by remember { mutableStateOf<Long?>(null) }
+    /** Display position a jump is waiting to scroll to,
+     * once the window has grown enough to compose the row. */
+    var pendingJumpPos by remember { mutableStateOf(-1) }
     val engineLabel by viewModel.engineLabel
         .collectAsStateWithLifecycle()
     // MR-6 Item 5: the per-book encoding door's state (the same
@@ -199,15 +326,41 @@ fun EditorialBookDetail(
             }
         }
 
+    // Patch B (gap 1): provider enrichment (Reviews /
+    // Comments / "Readers also read") loads on this face
+    // too — the shared page calls loadEnrichment() after
+    // its Editorial early-return, so this face never asked
+    // and EnrichmentSections below stayed permanently
+    // unloaded. The VM's call is once-only (enrichmentTried),
+    // so re-entry is free.
+    LaunchedEffect(book?.id) {
+        if (book != null) {
+            viewModel.loadEnrichment()
+            // Patch B (gap 61): the cover palette + seed —
+            // the shared page calls loadPalette() after its
+            // Editorial early-return, so this face never asked
+            // and state.coverSeedArgb stayed null (the wrapper
+            // above had nothing to build the book's scheme
+            // from). Once-only in the VM, so re-entry is free.
+            viewModel.loadPalette()
+        }
+    }
+
     if (book == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             if (state.loading) {
                 CircularProgressIndicator(color = colors.primary)
             } else {
-                Text(
-                    "This book could not be opened.",
-                    color = colors.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium
+                // Patch B (gap 12): the shared page's
+                // book-not-found state — a designed empty
+                // state with the way back, not bare text.
+                // (EmptyState itself takes the M3 form
+                // under this design.)
+                app.xreader.ui.common.EmptyState(
+                    title = "Book not found",
+                    message = "This book isn't in your library anymore.",
+                    actionLabel = "Back to library",
+                    onAction = onBack
                 )
             }
         }
@@ -318,6 +471,107 @@ fun EditorialBookDetail(
     val displayChapters = remember(visibleChapters, newestFirst) {
         ChapterDisplayOrder.ordered(visibleChapters, newestFirst)
     }
+    // Patch B (gap 5): the windowed display — 100 rows at a
+    // time, grown by the sentinel at the window's end (the
+    // shared page's v1.3.1/V120-CHECK 54 window, mirrored).
+    val displayedChapters = remember(displayChapters, chapterWindow) {
+        displayChapters.take(chapterWindow)
+    }
+    // A jump target (the Continue chapter) beyond the window
+    // expands the window to reach it — search and Continue
+    // must never be fenced off by the window.
+    LaunchedEffect(displayChapters, state.continueChapterIndex) {
+        val pos = displayChapters.indexOfFirst {
+            it.index == state.continueChapterIndex
+        }
+        if (pos >= chapterWindow) chapterWindow = pos + 1
+    }
+    // Patch B (gap 5): the near-edge growth trigger, hoisted
+    // exactly as the shared page hoists it — one snapshotFlow
+    // over the list's visible items reports the furthest
+    // visible chapter's stored index to the VM's growth seam.
+    LaunchedEffect(chapterListState, displayChapters) {
+        androidx.compose.runtime.snapshotFlow {
+            val byId = displayChapters.associateBy { it.id }
+            chapterListState.layoutInfo.visibleItemsInfo
+                .mapNotNull { item ->
+                    ((item.key as? String)
+                        ?.removePrefix("ch-")
+                        ?.toLongOrNull())
+                        ?.let { byId[it]?.index }
+                }
+                .maxOrNull()
+        }
+            .distinctUntilChanged()
+            .collect { maxIndex ->
+                if (maxIndex != null) {
+                    viewModel.onChapterNearEdge(maxIndex)
+                }
+            }
+    }
+    // Patch B (gap 4): the jump scroll. The chapter rows sit
+    // deep inside this page's single LazyColumn, so the scroll
+    // index is the chapter's display position plus the number
+    // of items the column emits before the first chapter row —
+    // counted from the same conditions that gate those items
+    // below (band, progress, source banner, tiles, AI tiles,
+    // status, encoding door, alerts, remove, synopsis,
+    // local-readd offer, contents head, contents tools).
+    val chapterRowPrefixCount = 9 +
+        (if (book.sourceType == SourceType.EXTENSION) 1 else 0) +
+        (if (encodingDoor.visible) 1 else 0) +
+        (if (!book.description.isNullOrBlank()) 1 else 0) +
+        (if (book.sourceType == SourceType.LOCAL_FILE &&
+            book.documentUri == null && book.filePath == null &&
+            localOutline.isEmpty()
+        ) 1 else 0)
+    LaunchedEffect(pendingJumpPos, displayedChapters.size) {
+        val pos = pendingJumpPos
+        if (pos >= 0 && pos < displayChapters.size &&
+            pos >= displayedChapters.size
+        ) {
+            chapterWindow = pos + 1
+        }
+        if (pos >= 0 && pos < displayedChapters.size) {
+            // The trigger clears in the FINALLY, after the
+            // scroll returns — clearing it first would change
+            // this effect's key mid-flight and cancel the
+            // animation in its first frame (the shared page's
+            // Fix C1 lesson, mirrored).
+            try {
+                chapterListState.animateScrollToItem(
+                    chapterRowPrefixCount + pos
+                )
+            } finally {
+                if (pendingJumpPos == pos) pendingJumpPos = -1
+            }
+        }
+    }
+    // The jump highlight is transient: it fades back to the
+    // plain row after a few seconds.
+    LaunchedEffect(jumpTargetId) {
+        if (jumpTargetId != null) {
+            kotlinx.coroutines.delay(2_800)
+            jumpTargetId = null
+        }
+    }
+    val maxChapterIndex = remember(state.chapters) {
+        state.chapters.maxOfOrNull { it.index } ?: -1
+    }
+    // Patch B (gap 9): the progress card's time-left estimate
+    // — the shared page's own WpmEstimator derivation over
+    // this book's chapters at the reader's measured pace.
+    val remainingEstimate = remember(state.chapters, state.wpm) {
+        app.xreader.domain.reader.WpmEstimator
+            .estimateRemainingMinutes(
+                state.chapters.map {
+                    app.xreader.domain.reader.WpmEstimator.ChapterWords(
+                        it.read, it.wordCount
+                    )
+                },
+                state.wpm
+            )
+    }
     val nextUnread = state.chapters.firstOrNull { !it.read }
     // A2: Save as EPUB exists when there is something to
     // save — a local book's own file, or chapters already
@@ -353,6 +607,10 @@ fun EditorialBookDetail(
         ) {
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
+            // Patch B (gap 4): the list state the chapter
+            // jump scrolls (previously this column had no
+            // state, so no programmatic scroll was possible).
+            state = chapterListState,
             contentPadding = PaddingValues(bottom = 108.dp)
         ) {
             // ── The tonal header band ──────────────────────────
@@ -570,15 +828,46 @@ fun EditorialBookDetail(
                                                 .copy(alpha = 0.8f)
                                         )
                                     }
-                                    Row(
-                                        horizontalArrangement =
-                                            Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        EditorialBandChip(formatLabel)
-                                        extentLabel?.let {
-                                            EditorialBandChip(it)
+                                    // Patch B (gap 10): the hero
+                                    // chips at parity, in the
+                                    // shared page's order —
+                                    // provider first, then format,
+                                    // the reader's own rating, the
+                                    // extent, and the downloaded
+                                    // fraction. A FlowRow so the
+                                    // full set wraps whole instead
+                                    // of crushing on narrow phones.
+                                    androidx.compose.foundation.layout
+                                        .FlowRow(
+                                            horizontalArrangement =
+                                                Arrangement.spacedBy(8.dp),
+                                            verticalArrangement =
+                                                Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            if (state.providerName
+                                                    .isNotBlank() &&
+                                                book.sourceType ==
+                                                SourceType.EXTENSION
+                                            ) {
+                                                EditorialBandChip(
+                                                    state.providerName
+                                                )
+                                            }
+                                            EditorialBandChip(formatLabel)
+                                            book.userRating?.let { rating ->
+                                                EditorialBandChip(
+                                                    "★ $rating"
+                                                )
+                                            }
+                                            extentLabel?.let {
+                                                EditorialBandChip(it)
+                                            }
+                                            EditorialBandChip(
+                                                "${state.downloadedCount}/" +
+                                                    "${state.chapters.size} " +
+                                                    "downloaded"
+                                            )
                                         }
-                                    }
                                 }
                             }
                         }
@@ -595,6 +884,10 @@ fun EditorialBookDetail(
                         .fillMaxWidth()
                         .padding(start = 20.dp, end = 20.dp, top = 24.dp)
                 ) {
+                    // Patch B (gap 9): a Column now — the ring
+                    // row on top, the metric tiles and notes
+                    // below it, inside the one card.
+                    Column {
                     Row(
                         Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -659,6 +952,206 @@ fun EditorialBookDetail(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = colors.onSurfaceVariant
                             )
+                        }
+                    }
+                    // Patch B (gap 9): the progress card's
+                    // missing pieces, in this face's language —
+                    // the two micro-metric tiles (time left at
+                    // the reader's own pace, what's on the
+                    // device), the update-rhythm line, and the
+                    // progress carry-over notes. The values are
+                    // the shared page's own derivations.
+                    Row(
+                        Modifier.padding(
+                            start = 16.dp, end = 16.dp, bottom = 16.dp
+                        ),
+                        horizontalArrangement =
+                            Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = colors.surfaceContainer,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Row(
+                                Modifier.padding(10.dp),
+                                verticalAlignment =
+                                    Alignment.CenterVertically,
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Schedule,
+                                    contentDescription = null,
+                                    tint = colors.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Column {
+                                    Text(
+                                        "TIME LEFT",
+                                        style = MaterialTheme.typography
+                                            .labelSmall,
+                                        letterSpacing = 1.2.sp,
+                                        color = colors.onSurfaceVariant
+                                    )
+                                    Text(
+                                        if (remainingEstimate.first > 0) {
+                                            app.xreader.domain.reader
+                                                .WpmEstimator.formatMinutes(
+                                                    remainingEstimate.first
+                                                ) + " left"
+                                        } else {
+                                            "—"
+                                        },
+                                        style = MaterialTheme.typography
+                                            .labelMedium,
+                                        color = colors.onSurface
+                                    )
+                                }
+                            }
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = colors.surfaceContainer,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Row(
+                                Modifier.padding(10.dp),
+                                verticalAlignment =
+                                    Alignment.CenterVertically,
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(10.dp)
+                            ) {
+                                Icon(
+                                    Icons.Filled.Download,
+                                    contentDescription = null,
+                                    tint = colors.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Column {
+                                    Text(
+                                        "ON DEVICE",
+                                        style = MaterialTheme.typography
+                                            .labelSmall,
+                                        letterSpacing = 1.2.sp,
+                                        color = colors.onSurfaceVariant
+                                    )
+                                    Text(
+                                        "${state.downloadedCount} chapters",
+                                        style = MaterialTheme.typography
+                                            .labelMedium,
+                                        color = colors.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    // The rhythm line — shown only when the
+                    // cadence is actually knowable (UpdateRhythm).
+                    state.expectedNextLabel?.let { label ->
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = 16.dp, end = 16.dp, bottom = 16.dp
+                            )
+                        )
+                    }
+                    // The progress carry-over notes — they
+                    // describe the resume this card reports.
+                    state.carriedOverNote?.let { note ->
+                        Text(
+                            note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = 16.dp, end = 16.dp, bottom = 16.dp
+                            )
+                        )
+                    }
+                    state.progressLinkNote?.let { note ->
+                        Text(
+                            note,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = colors.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                start = 16.dp, end = 16.dp, bottom = 16.dp
+                            )
+                        )
+                    }
+                    }
+                }
+            }
+
+            // Patch B (gap 11): the source banner — the host
+            // the book came from, how much of it is loaded,
+            // and the site-check door on a HEALTHY book (the
+            // shared page's banner, in this face's language;
+            // until now the site check existed here only
+            // inside the failure card).
+            if (book.sourceType == SourceType.EXTENSION) {
+                item(key = "source-banner") {
+                    val host = remember(section.sourcePageUrl) {
+                        section.sourcePageUrl?.let { url ->
+                            runCatching { java.net.URI(url).host }
+                                .getOrNull()
+                        }
+                    }
+                    Surface(
+                        color = colors.surfaceContainerLow,
+                        shape = RoundedCornerShape(24.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(
+                                start = 20.dp, end = 20.dp, top = 16.dp
+                            )
+                    ) {
+                        Row(
+                            Modifier.padding(
+                                horizontal = 14.dp, vertical = 10.dp
+                            ),
+                            verticalAlignment =
+                                Alignment.CenterVertically,
+                            horizontalArrangement =
+                                Arrangement.spacedBy(8.dp)
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(8.dp)
+                                    .background(
+                                        if (state.sourceNeedsSiteCheck) {
+                                            Color(0xFFF59E0B)
+                                        } else {
+                                            Color(0xFF34D399)
+                                        },
+                                        CircleShape
+                                    )
+                            )
+                            Text(
+                                host ?: "Source book",
+                                style = MaterialTheme.typography
+                                    .labelMedium,
+                                color = colors.onSurface,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Text(
+                                "· ${state.chapters.size} loaded",
+                                style = MaterialTheme.typography
+                                    .labelSmall,
+                                color = colors.onSurfaceVariant
+                            )
+                            Spacer(Modifier.weight(1f))
+                            if (state.sourceNeedsSiteCheck) {
+                                TextButton(
+                                    onClick = {
+                                        book.extensionId?.let {
+                                            onSiteCheck(it)
+                                        }
+                                    }
+                                ) { Text("Site check") }
+                            }
                         }
                     }
                 }
@@ -777,7 +1270,19 @@ fun EditorialBookDetail(
                                     .weight(1f)
                                     .height(48.dp)
                                     .clickable {
-                                        viewModel.setReadingStatus(status)
+                                        // Patch B (gap 8):
+                                        // re-tapping the picked
+                                        // status clears it back to
+                                        // NONE, like the shared
+                                        // page — the segment was a
+                                        // one-way door before.
+                                        viewModel.setReadingStatus(
+                                            if (picked) {
+                                                ReadingStatus.NONE
+                                            } else {
+                                                status
+                                            }
+                                        )
                                     }
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
@@ -1014,20 +1519,24 @@ fun EditorialBookDetail(
                         if (book.sourceType == SourceType.EXTENSION &&
                             state.chapters.isNotEmpty()
                         ) {
+                            // Patch B (gap 3): the pill opens
+                            // the Download choices sheet (Whole
+                            // book / Next 10 / Up to latest
+                            // unread, with counts) — the shared
+                            // page's three ranges — instead of
+                            // firing "Download all" directly.
                             EditorialActionPill(
                                 icon = Icons.Filled.Download,
                                 label = if (
                                     state.hasUndownloadedChapters
                                 ) {
-                                    "Download all"
+                                    "Download"
                                 } else {
                                     "Downloaded"
                                 },
                                 enabled = state.hasUndownloadedChapters,
                                 horizontalPadding = 10.dp,
-                                onClick = {
-                                    viewModel.downloadAllChapters()
-                                }
+                                onClick = { downloadSheetOpen = true }
                             )
                         }
                         if (canSaveEpub) {
@@ -1258,12 +1767,59 @@ fun EditorialBookDetail(
                             value = jumpFieldText,
                             onValueChange = { value ->
                                 jumpFieldText = value
-                                // The shared page's law: the
-                                // entry sets the search — a
-                                // number lands on the exact
-                                // chapter through the filter's
-                                // number rung.
-                                chapterQuery = value.trim()
+                                // Patch B (gap 4): the REAL jump,
+                                // the shared page's wiring — a
+                                // purely numeric entry resolves
+                                // through ChapterJump against the
+                                // list as the new query filters it,
+                                // loads forward past the loaded
+                                // edge, and queues the scroll +
+                                // highlight; it ALSO sets
+                                // chapterQuery (the filter's number
+                                // rung is an exact identity match).
+                                // Non-numeric text is the text
+                                // search, as before. Before this
+                                // fix the field only filtered.
+                                if (ChapterJump.isJumpQuery(value)) {
+                                    chapterQuery = value
+                                    ChapterJump.parseNumber(value)
+                                        ?.let { number ->
+                                            viewModel
+                                                .onChapterNumberSearch(
+                                                    number.toInt()
+                                                )
+                                        }
+                                    val jumpDisplay =
+                                        ChapterDisplayOrder.ordered(
+                                            app.xreader.domain.reader
+                                                .ChapterListFilter.apply(
+                                                    state.chapters,
+                                                    value,
+                                                    chapterStateFilter,
+                                                    chapterPartFilter
+                                                ),
+                                            newestFirst
+                                        )
+                                    val pos = ChapterJump
+                                        .resolvePosition(
+                                            value, jumpDisplay
+                                        )
+                                    if (pos >= 0) {
+                                        jumpTargetId =
+                                            jumpDisplay[pos].id
+                                        if (pos >= chapterWindow) {
+                                            chapterWindow = pos + 1
+                                        }
+                                        pendingJumpPos = pos
+                                    } else {
+                                        jumpTargetId = null
+                                        pendingJumpPos = -1
+                                    }
+                                } else {
+                                    jumpTargetId = null
+                                    pendingJumpPos = -1
+                                    chapterQuery = value
+                                }
                             },
                             placeholder = { Text("Jump to chapter…") },
                             singleLine = true,
@@ -1282,6 +1838,90 @@ fun EditorialBookDetail(
                                 color = colors.onSurfaceVariant
                             )
                         }
+                        // Patch B (gap 5): a load-more attempt
+                        // that FAILED gets the plain-words retry
+                        // row — the shared page's one allowed
+                        // surfacing of a failed grow (partiality
+                        // itself stays invisible). This replaces
+                        // the bare error text below for exactly
+                        // this state.
+                        if (section.kind ==
+                            ChaptersSectionKind.LIST &&
+                            !book.chapterListComplete &&
+                            state.chaptersError != null
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(24.dp),
+                                color = colors.surfaceContainerLow,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    Modifier.padding(
+                                        horizontal = 14.dp,
+                                        vertical = 8.dp
+                                    ),
+                                    verticalAlignment =
+                                        Alignment.CenterVertically,
+                                    horizontalArrangement =
+                                        Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text(
+                                        "More chapters couldn't be " +
+                                            "loaded — the source " +
+                                            "didn't answer.",
+                                        style = MaterialTheme.typography
+                                            .bodySmall,
+                                        color = colors.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    TextButton(
+                                        onClick = {
+                                            viewModel.loadFullChapterList()
+                                        }
+                                    ) {
+                                        Text("Try again")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // Patch B (gap 6): the "no chapters match" empty
+            // state with the one-tap way out — the shared
+            // page's state, in this face's language. (It sits
+            // before the chapter items; it renders only when
+            // the filtered list is empty, so it never shifts
+            // the jump's row-prefix count on a real jump.)
+            if (section.kind == ChaptersSectionKind.LIST &&
+                visibleChapters.isEmpty() &&
+                state.chapters.isNotEmpty() &&
+                localOutline.isEmpty()
+            ) {
+                item(key = "chapters-filter-empty") {
+                    Column(
+                        Modifier.padding(
+                            start = 20.dp, end = 20.dp, top = 16.dp
+                        ),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            "No chapters match that search or filter.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.onSurfaceVariant
+                        )
+                        TextButton(
+                            onClick = {
+                                chapterQuery = ""
+                                jumpFieldText = ""
+                                jumpTargetId = null
+                                pendingJumpPos = -1
+                                chapterStateFilter =
+                                    app.xreader.domain.reader
+                                        .ChapterListFilter.State.ALL
+                                chapterPartFilter = null
+                            }
+                        ) { Text("Clear search & filters") }
                     }
                 }
             }
@@ -1302,7 +1942,18 @@ fun EditorialBookDetail(
                     )
                 }
             } else {
-                items(displayChapters, key = { "ch-${it.id}" }) { chapter ->
+                items(displayedChapters, key = { "ch-${it.id}" }) { chapter ->
+                    // Patch B (gap 7): the row's full
+                    // information set, computed exactly as the
+                    // shared page computes it for ChapterRow —
+                    // proven word count (0 for stub bodies),
+                    // ≈min / ≈min left at the reader's pace,
+                    // the NEW verdict, the current percent.
+                    val displayWordCount =
+                        app.xreader.data.download.ChapterTruth152
+                            .displayWordCount(
+                                chapter, state.stubChapterIds
+                            )
                     EditorialContentsRow(
                         number = ChapterDisplayOrder
                             .displayNumber(chapter)?.toIntOrNull()
@@ -1312,12 +1963,61 @@ fun EditorialBookDetail(
                         current = chapter.index ==
                             state.continueChapterIndex &&
                             state.progress != null,
+                        highlighted = chapter.id == jumpTargetId,
+                        isNew = chapter.index == maxChapterIndex &&
+                            !chapter.read && state.chapters.size > 1,
+                        currentPercent = if (
+                            chapter.index == state.continueChapterIndex
+                        ) {
+                            (state.progress?.fraction?.times(100))
+                                ?.toInt()
+                        } else {
+                            null
+                        },
+                        isStubBody = chapter.id in state.stubChapterIds,
+                        provenWordCount = displayWordCount,
+                        minutesLeft = if (displayWordCount > 0) {
+                            (displayWordCount / state.wpm).toInt()
+                                .coerceAtLeast(1)
+                        } else {
+                            null
+                        },
+                        hasStartedReading = hasStartedReading(
+                            state.progress?.fraction,
+                            state.chapters.any { it.read }
+                        ),
+                        rowMark = app.xreader.data.download
+                            .ChapterTruth152.rowMark(chapter),
+                        scanlator = chapter.scanlator,
                         downloadState = chapter.downloadState,
                         canDownload = !chapter.remoteId.isNullOrBlank(),
                         dateText = chapter.dateText,
                         onDownload = { viewModel.downloadChapter(chapter) },
                         onClick = { onReadChapter(chapter.index) }
                     )
+                }
+                // Patch B (gap 5): the window's end is a
+                // SENTINEL, not a button — composing it grows
+                // the window by 200 and reports the new window
+                // end to the same near-edge growth the visible
+                // rows trigger, so reveal and fetch-streaming
+                // are driven by the scroll itself.
+                if (chapterWindow < displayChapters.size) {
+                    item(key = "chapters-window-more") {
+                        LaunchedEffect(Unit) {
+                            chapterWindow += 200
+                            viewModel.onChapterNearEdge(chapterWindow)
+                        }
+                        Text(
+                            "Showing ${displayedChapters.size} of " +
+                                "${displayChapters.size} chapters",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.onSurfaceVariant,
+                            modifier = Modifier.padding(
+                                horizontal = 20.dp, vertical = 10.dp
+                            )
+                        )
+                    }
                 }
             }
             if (section.showRecoveryDoors && localOutline.isEmpty()) {
@@ -1458,7 +2158,12 @@ fun EditorialBookDetail(
                     }
                 }
             } else if (state.chaptersError != null &&
-                localOutline.isEmpty()
+                localOutline.isEmpty() &&
+                // Patch B (gap 5): a failed grow on a partial
+                // list is carried by the "Try again" row in
+                // the contents tools now — never both.
+                !(section.kind == ChaptersSectionKind.LIST &&
+                    !book.chapterListComplete)
             ) {
                 item(key = "contents-error") {
                     Text(
@@ -1769,6 +2474,52 @@ fun EditorialBookDetail(
                         modifier = Modifier.size(24.dp)
                     )
                 }
+                // Patch B (gap 13): the Continue honesty states.
+                // The SplitButton FORM is deliberate and stays
+                // for the ready state — but on the finding /
+                // stalled / unavailable states the shared page
+                // swaps in the inert unavailable pill (with a
+                // visible Retry once the wait crosses the honest
+                // bound), and this face must too: a blocked read
+                // never renders as a live Continue here.
+                when (state.readCtaState) {
+                    ReadCtaState.CHAPTERS_UNAVAILABLE -> {
+                        EditorialUnavailablePill(
+                            reason = state.readBlockedReason!!,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    ReadCtaState.FINDING_CHAPTERS -> {
+                        Column(Modifier.weight(1f)) {
+                            EditorialUnavailablePill(
+                                title = "Finding chapters…",
+                                reason = when {
+                                    state.challengePending ->
+                                        "Waiting for the site's check…"
+                                    state.chaptersStalled ->
+                                        "Still finding — " +
+                                            "this source is slow"
+                                    else ->
+                                        "The chapter list is still " +
+                                            "loading from the source."
+                                },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                            if (state.chaptersStalled &&
+                                !state.challengePending
+                            ) {
+                                TextButton(
+                                    onClick = {
+                                        viewModel.refreshChapters()
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Retry")
+                                }
+                            }
+                        }
+                    }
+                    ReadCtaState.READY -> {
                 Spacer(Modifier.weight(1f))
                 // Code 124 (E4): the Read door as the official
                 // SplitButton — main = Read / Continue, the
@@ -1858,6 +2609,8 @@ fun EditorialBookDetail(
                         }
                     }
                 }
+                    }
+                }
             }
         }
     }
@@ -1918,6 +2671,138 @@ fun EditorialBookDetail(
                 ) { Text("No, keep it") }
             }
         )
+    }
+
+    // Patch B (gap 2): the deliberate-switch preview — the
+    // shared page's confirm dialog in Material 3 language.
+    // SourcesMergeSection above already wires onPreviewMove
+    // to the VM; until now nothing on this face rendered the
+    // preview, so a move could be started but never confirmed.
+    // Nothing has changed yet; the numbers here are exactly
+    // what "Move this book" will do.
+    val preview = state.switchPreview
+    val switchCandidate = state.switchCandidate
+    if (preview != null && switchCandidate != null) {
+        AlertDialog(
+            onDismissRequest = { viewModel.dismissSwitch() },
+            title = { Text("Move to ${switchCandidate.sourceName}?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        "${preview.matchedChapters} of your chapters match " +
+                            "on the new source (${preview.newSourceChapters} there).",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                    if (preview.progressChapterIndex >= 0) {
+                        Text(
+                            "Your place lands at chapter " +
+                                "${preview.progressChapterIndex + 1}" +
+                                if (preview.progressApproximate) {
+                                    " (the nearest earlier match)."
+                                } else {
+                                    "."
+                                },
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Text(
+                        "Downloaded chapters stay with the old copy — " +
+                            "you can download again on the new source. " +
+                            "The old copy is kept, merged, and can be " +
+                            "brought back any time.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.onSurfaceVariant
+                    )
+                    if (!preview.canSwitch) {
+                        Text(
+                            "Too few chapters match to move safely — " +
+                                "this move isn't available.",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = colors.error
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.confirmSwitch()
+                        onBack()
+                    },
+                    enabled = preview.canSwitch
+                ) { Text("Move this book") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.dismissSwitch() }) {
+                    Text("Stay here")
+                }
+            }
+        )
+    }
+
+    // Patch B (gap 3): the Download choices sheet — the three
+    // ranges a reader actually picks, each showing the count
+    // it will queue (BookDownloadRanges computes both the
+    // sheet's numbers and the tap's queue, so they can't
+    // disagree). Material 3 form: a modal sheet of list rows.
+    if (downloadSheetOpen) {
+        val counts = BookDownloadRanges.counts(state.chapters)
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { downloadSheetOpen = false },
+            sheetState = androidx.compose.material3
+                .rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ) {
+            Column(
+                Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    "Download chapters",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                EditorialDownloadChoiceRow(
+                    icon = Icons.Filled.Download,
+                    label = "Whole book",
+                    caption = "${counts[BookDownloadChoice.ALL] ?: 0} " +
+                        "chapters not on this phone yet",
+                    enabled = (counts[BookDownloadChoice.ALL] ?: 0) > 0,
+                    onClick = {
+                        downloadSheetOpen = false
+                        viewModel.downloadChoice(BookDownloadChoice.ALL)
+                    }
+                )
+                EditorialDownloadChoiceRow(
+                    icon = Icons.Filled.FastForward,
+                    label = "Next ${BookDownloadRanges.NEXT_COUNT}",
+                    caption = "The next " +
+                        "${counts[BookDownloadChoice.NEXT_10] ?: 0} " +
+                        "chapters in reading order",
+                    enabled = (counts[BookDownloadChoice.NEXT_10] ?: 0) > 0,
+                    onClick = {
+                        downloadSheetOpen = false
+                        viewModel.downloadChoice(BookDownloadChoice.NEXT_10)
+                    }
+                )
+                EditorialDownloadChoiceRow(
+                    icon = Icons.Filled.FiberNew,
+                    label = "Up to the latest unread",
+                    caption = "${counts[BookDownloadChoice.UP_TO_LATEST_UNREAD] ?: 0} " +
+                        "chapters you haven't read yet",
+                    enabled = (counts[
+                        BookDownloadChoice.UP_TO_LATEST_UNREAD
+                    ] ?: 0) > 0,
+                    onClick = {
+                        downloadSheetOpen = false
+                        viewModel.downloadChoice(
+                            BookDownloadChoice.UP_TO_LATEST_UNREAD
+                        )
+                    }
+                )
+                Spacer(Modifier.height(24.dp))
+            }
+        }
     }
 
     // Remove: the soft door and the delete door, both honest.
@@ -2362,6 +3247,25 @@ private fun EditorialContentsRow(
     read: Boolean,
     current: Boolean,
     onClick: () -> Unit,
+    /** Patch B (gap 4): a jump landed on this row — it takes
+     * the current chapter's treatment while the highlight
+     * lasts. */
+    highlighted: Boolean = false,
+    /** Patch B (gap 7): the shared page's ChapterRow
+     * information set — the NEW verdict, the current
+     * chapter's percent, the stub-body lock, the PROVEN word
+     * count (0 for stubs), ≈min at the reader's pace, whether
+     * reading has begun (gates "≈min left"), the §12.10 row
+     * mark (Downloaded vs Cached), and the scanlator credit.
+     * Defaults keep the local-outline rows unchanged. */
+    isNew: Boolean = false,
+    currentPercent: Int? = null,
+    isStubBody: Boolean = false,
+    provenWordCount: Int = 0,
+    minutesLeft: Int? = null,
+    hasStartedReading: Boolean = false,
+    rowMark: app.xreader.data.download.ChapterTruth152.RowMark? = null,
+    scanlator: String? = null,
     /** Code 124 (A2): this chapter's download state — the
      * same DownloadState the shared page's ChapterRow keys
      * its trailing button on. Null = a local-outline row,
@@ -2387,7 +3291,7 @@ private fun EditorialContentsRow(
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Surface(
-            color = if (current) {
+            color = if (current || highlighted) {
                 colors.primaryContainer
             } else {
                 colors.surfaceContainerHigh
@@ -2401,7 +3305,7 @@ private fun EditorialContentsRow(
                     fontFamily = FrauncesSerif,
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 14.sp,
-                    color = if (current) {
+                    color = if (current || highlighted) {
                         colors.onPrimaryContainer
                     } else {
                         colors.onSurfaceVariant
@@ -2418,25 +3322,97 @@ private fun EditorialContentsRow(
                 .relative(dateText)
         }
         Column(Modifier.weight(1f)) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = if (current) {
-                    FontWeight.SemiBold
-                } else {
-                    FontWeight.Normal
-                },
-                color = if (read && !current) {
-                    colors.onSurfaceVariant
-                } else {
-                    colors.onSurface
-                },
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis
-            )
-            dateLine?.let { date ->
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 Text(
-                    date,
+                    title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    fontWeight = if (current || highlighted) {
+                        FontWeight.SemiBold
+                    } else {
+                        FontWeight.Normal
+                    },
+                    color = if (read && !current) {
+                        colors.onSurfaceVariant
+                    } else {
+                        colors.onSurface
+                    },
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                // Patch B (gap 7): the "Current · N%" and
+                // "NEW" chips, the shared page's verdicts in
+                // this face's chip language.
+                if (current) {
+                    Surface(
+                        shape = CircleShape,
+                        color = colors.secondaryContainer
+                    ) {
+                        Text(
+                            "Current" + (currentPercent?.let {
+                                " · $it%"
+                            } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.onSecondaryContainer,
+                            modifier = Modifier.padding(
+                                horizontal = 6.dp, vertical = 2.dp
+                            )
+                        )
+                    }
+                } else if (isNew) {
+                    Surface(
+                        shape = CircleShape,
+                        color = colors.primaryContainer
+                    ) {
+                        Text(
+                            "NEW",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = colors.onPrimaryContainer,
+                            modifier = Modifier.padding(
+                                horizontal = 6.dp, vertical = 2.dp
+                            )
+                        )
+                    }
+                }
+            }
+            // Patch B (gap 7): the status line — the shared
+            // page's ChapterRow derivation, verbatim: the
+            // stub-body lock, Read · Downloaded/Cached,
+            // Continue here (+ ≈min left once reading has
+            // begun), or the word count with ≈min — joined
+            // dot-separated with the release date and the
+            // scanlator credit, each absent when the source
+            // offers none.
+            val statusLine = when {
+                isStubBody -> "Locked — sign in to read this chapter"
+                read -> "Read" + when (rowMark) {
+                    app.xreader.data.download.ChapterTruth152
+                        .RowMark.DOWNLOADED -> " · Downloaded"
+                    app.xreader.data.download.ChapterTruth152
+                        .RowMark.CACHED -> " · Cached"
+                    else -> ""
+                }
+                current -> "Continue here" +
+                    (if (hasStartedReading) {
+                        minutesLeft?.let { " · ≈$it min left" } ?: ""
+                    } else {
+                        ""
+                    })
+                provenWordCount > 0 -> "$provenWordCount words" +
+                    (minutesLeft?.let { " · ≈$it min" } ?: "")
+                else -> ""
+            }
+            val subtitle = listOfNotNull(
+                statusLine.ifEmpty { null },
+                dateLine,
+                scanlator?.takeIf { it.isNotBlank() }
+            ).joinToString(" · ")
+            if (subtitle.isNotEmpty()) {
+                Text(
+                    subtitle,
                     style = MaterialTheme.typography.bodySmall,
                     color = colors.onSurfaceVariant,
                     maxLines = 1,
@@ -2455,12 +3431,28 @@ private fun EditorialContentsRow(
         // A2: the per-chapter download button, on every
         // chapter row, with its live state.
         when (downloadState) {
-            app.xreader.data.db.DownloadState.READY -> Icon(
-                Icons.Filled.CheckCircle,
-                contentDescription = "Downloaded",
-                tint = colors.tertiary,
-                modifier = Modifier.size(20.dp)
-            )
+            // Patch B (gap 7): §12.10's marks — Cached
+            // (automatic + on device) is the HOLLOW circle,
+            // Downloaded (the reader's own act) the filled
+            // one; the two are never the same glyph again.
+            app.xreader.data.db.DownloadState.READY -> if (
+                rowMark == app.xreader.data.download.ChapterTruth152
+                    .RowMark.CACHED
+            ) {
+                Icon(
+                    Icons.Outlined.CheckCircle,
+                    contentDescription = "Cached",
+                    tint = colors.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            } else {
+                Icon(
+                    Icons.Filled.CheckCircle,
+                    contentDescription = "Downloaded",
+                    tint = colors.tertiary,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
             app.xreader.data.db.DownloadState.DOWNLOADING,
             app.xreader.data.db.DownloadState.QUEUED -> Icon(
                 Icons.Filled.Schedule,
@@ -2509,6 +3501,77 @@ private fun EditorialContentsRow(
             null -> Unit
         }
     }
+}
+
+/** Patch B (gap 13): the Continue honesty pill in Material 3
+ * language — an inert, tonal pill that REPLACES the live
+ * SplitButton while chapters are finding / stalled /
+ * unavailable, carrying the reason itself. The headline
+ * follows the state: "Chapters unavailable" only on a settled
+ * failure; the finding headline while a fetch is in flight. */
+@Composable
+private fun EditorialUnavailablePill(
+    reason: String,
+    modifier: Modifier = Modifier,
+    title: String = "Chapters unavailable"
+) {
+    val colors = MaterialTheme.colorScheme
+    Surface(
+        modifier = modifier,
+        shape = CircleShape,
+        color = colors.surfaceContainerHigh,
+        contentColor = colors.onSurfaceVariant
+    ) {
+        Column(
+            Modifier.padding(horizontal = 20.dp, vertical = 12.dp)
+        ) {
+            Text(
+                title,
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1
+            )
+            Text(
+                reason,
+                style = MaterialTheme.typography.bodySmall,
+                color = colors.error
+            )
+        }
+    }
+}
+
+/** Patch B (gap 3): one Download-choices row in Material 3
+ * language — a tonal list item with the range's icon, its
+ * plain-words label and the live count it will queue. */
+@Composable
+private fun EditorialDownloadChoiceRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    caption: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val colors = MaterialTheme.colorScheme
+    androidx.compose.material3.ListItem(
+        headlineContent = { Text(label) },
+        supportingContent = { Text(caption) },
+        leadingContent = {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = if (enabled) {
+                    colors.primary
+                } else {
+                    colors.onSurfaceVariant
+                }
+            )
+        },
+        colors = androidx.compose.material3.ListItemDefaults.colors(
+            containerColor = colors.surfaceContainer
+        ),
+        modifier = Modifier
+            .clip(RoundedCornerShape(24.dp))
+            .clickable(enabled = enabled, onClick = onClick)
+    )
 }
 
 /** The settled status names (D23), for Copy details —

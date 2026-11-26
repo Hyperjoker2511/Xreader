@@ -132,11 +132,20 @@ fun MoreScreen(
             meStreak = meStreak,
             whatsNewVisible = whatsNewVisible,
             onOpenWhatsNew = onOpenWhatsNew,
+            // Patch B (gap 52): Nocturne's Dismiss door —
+            // the same callback the shell wires to the
+            // whatsNewSeen store.
+            onDismissWhatsNew = onDismissWhatsNew,
             healNote = healNote,
             onDismissHealNote = onDismissHealNote,
             artCount = artCount,
             onProfile = onProfile,
             onCustomise = onCustomise,
+            // Patch B (gap 51): the History door Nocturne's
+            // hub has always carried — the shell already
+            // passes onHistory to this screen; the M3 hub
+            // simply never received it.
+            onHistory = onHistory,
             onSync = onSync,
             onProviders = onProviders,
             onGeneratedArt = onGeneratedArt,
@@ -562,11 +571,13 @@ private fun M3MeHub(
     meStreak: Int,
     whatsNewVisible: Boolean,
     onOpenWhatsNew: () -> Unit,
+    onDismissWhatsNew: () -> Unit,
     healNote: String?,
     onDismissHealNote: () -> Unit,
     artCount: Int,
     onProfile: () -> Unit,
     onCustomise: () -> Unit,
+    onHistory: () -> Unit,
     onSync: () -> Unit,
     onProviders: () -> Unit,
     onGeneratedArt: () -> Unit,
@@ -681,8 +692,13 @@ private fun M3MeHub(
                 // R5): the What's-New note is a filled card above
                 // the doors card, like the heal note — its
                 // seen-state rules are untouched.
+                // Patch B (gap 52): the card no longer swallows
+                // the tap as its only door — Nocturne's two
+                // actions ride inside it: "See what's new"
+                // (the same open door) and "Dismiss" (the
+                // shell's whatsNewSeen write), as M3 text
+                // buttons under the row.
                 androidx.compose.material3.Card(
-                    onClick = onOpenWhatsNew,
                     colors = androidx.compose.material3.CardDefaults
                         .cardColors(
                             containerColor = MaterialTheme
@@ -715,6 +731,18 @@ private fun M3MeHub(
                                     .graphics.Color.Transparent
                             )
                     )
+                    Row(
+                        Modifier.padding(start = 8.dp, bottom = 4.dp),
+                        horizontalArrangement =
+                            Arrangement.spacedBy(8.dp)
+                    ) {
+                        androidx.compose.material3.TextButton(
+                            onClick = onOpenWhatsNew
+                        ) { Text("See what's new") }
+                        androidx.compose.material3.TextButton(
+                            onClick = onDismissWhatsNew
+                        ) { Text("Dismiss") }
+                    }
                 }
             }
             androidx.compose.material3.HorizontalDivider(
@@ -726,6 +754,13 @@ private fun M3MeHub(
                     title = "Customise",
                     subtitle = "Design, colours, reader and the rest",
                     onClick = onCustomise
+                ),
+                MeDoorData(
+                    icon = Icons.Filled.History,
+                    title = "History",
+                    subtitle =
+                        "Everything you've been reading, in time order",
+                    onClick = onHistory
                 ),
                 MeDoorData(
                     icon = Icons.Filled.Sync,

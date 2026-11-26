@@ -23,6 +23,17 @@ class UpdateNotifier(private val context: Context) {
 
     private val manager = NotificationManagerCompat.from(context)
 
+    // Patch B (B-6, B4a): the last progress this instance
+    // actually posted. [showProgress] rebuilds the whole
+    // notification (channel check, two PendingIntents) and
+    // posts it through NotificationManager — a Binder IPC
+    // the system rate-limits — so a post whose displayed
+    // percent hasn't moved is pure cost. Callers conflate
+    // already (UpdateHttp, UpdateDownloadManager); this is
+    // the final guard at the IPC itself.
+    private var lastPostedVersion: String? = null
+    private var lastPostedPercent: Int? = null
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
@@ -56,9 +67,20 @@ class UpdateNotifier(private val context: Context) {
     }
 
     /** Progress while the APK downloads; a null [fraction]
-     * (unknown length) shows the indeterminate bar. */
+     * (unknown length) shows the indeterminate bar. A call
+     * whose displayed percent is unchanged since the last
+     * post (same version) is dropped — see the guard note
+     * on [lastPostedPercent]. */
     fun showProgress(version: String, fraction: Float?) {
         if (!manager.areNotificationsEnabled()) return
+        val percent = fraction?.let { (it * 100).toInt() }
+        if (percent != null && version == lastPostedVersion &&
+            percent == lastPostedPercent
+        ) {
+            return
+        }
+        lastPostedVersion = version
+        lastPostedPercent = percent
         runCatching {
             manager.notify(
                 NOTIFICATION_ID,
@@ -115,6 +137,8 @@ class UpdateNotifier(private val context: Context) {
     }
 
     fun showReady(version: String) {
+        lastPostedVersion = null
+        lastPostedPercent = null
         if (!manager.areNotificationsEnabled()) return
         val builder = baseBuilder()
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
@@ -127,6 +151,8 @@ class UpdateNotifier(private val context: Context) {
     }
 
     fun showFailed() {
+        lastPostedVersion = null
+        lastPostedPercent = null
         if (!manager.areNotificationsEnabled()) return
         val builder = baseBuilder()
             .setSmallIcon(android.R.drawable.stat_sys_warning)
@@ -139,6 +165,8 @@ class UpdateNotifier(private val context: Context) {
     }
 
     fun clear() {
+        lastPostedVersion = null
+        lastPostedPercent = null
         runCatching { manager.cancel(NOTIFICATION_ID) }
     }
 

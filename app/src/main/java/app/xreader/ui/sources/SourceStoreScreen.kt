@@ -143,7 +143,13 @@ fun SourceStoreScreen(
             onInstallFamilySite = { viewModel.installFamilySource(it) },
             onCreateFromSite = { viewModel.createSourceFromSite(it) },
             onAcceptChanged = { viewModel.acceptChangedIndex(it) },
-            onDismissChanged = { viewModel.dismissChangedIndex(it) }
+            onDismissChanged = { viewModel.dismissChangedIndex(it) },
+            onTogglePin = { repo ->
+                viewModel.setRepoPinned(
+                    repo.id, repo.id !in state.pinnedRepoIds
+                )
+            },
+            onRemoveRepo = { repo -> viewModel.removeRepo(repo) }
         )
         return
     }
@@ -706,9 +712,22 @@ private fun M3SourceStore(
     onInstallFamilySite: (app.xreader.data.extension.ForeignSite) -> Unit,
     onCreateFromSite: (app.xreader.data.extension.ForeignSite) -> Unit,
     onAcceptChanged: (ExtensionRepo) -> Unit,
-    onDismissChanged: (ExtensionRepo) -> Unit
+    onDismissChanged: (ExtensionRepo) -> Unit,
+    /** Patch B (gap 37): pin/unpin a repository — the same
+     * SourcesViewModel.setRepoPinned call Nocturne's store makes. */
+    onTogglePin: (ExtensionRepo) -> Unit = {},
+    /** Patch B (gap 36): remove a repository (after the confirm
+     * dialog below) — SourcesViewModel.removeRepo, as Nocturne. */
+    onRemoveRepo: (ExtensionRepo) -> Unit = {}
 ) {
     var query by remember { mutableStateOf("") }
+    // Gap 36: the remove confirm's target (the shared dialog at
+    // the foot of SourceStoreScreen sits after this branch's
+    // early return, so this branch carries its own confirm with
+    // the same words, calling the same removeRepo).
+    var pendingRemoval by remember {
+        mutableStateOf<ExtensionRepo?>(null)
+    }
     var pendingInstall by remember {
         mutableStateOf<
             Pair<ExtensionRepo, app.xreader.data.extension.IndexPackage>?
@@ -906,19 +925,78 @@ private fun M3SourceStore(
             }
             orderedRepos.forEach { repo ->
                 val entries = entriesFor(repo).filter { matches(it) }
-                if (entries.isNotEmpty()) {
+                // Patch B (gaps 36–38): the header renders even
+                // with no entries loaded, so the repository's
+                // own doors (pin / remove / last checked) are
+                // always reachable, as on Nocturne's store.
+                if (entries.isNotEmpty() || query.isBlank()) {
                     item(
                         key = "m3store-repo-head-${repo.id}",
                         span = { GridItemSpan(maxLineSpan) }
                     ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            M3GroupHeader(
-                                "${repo.name} · ${entries.size} sources",
-                                Modifier.weight(1f)
+                        Column {
+                            Row(
+                                verticalAlignment =
+                                    Alignment.CenterVertically
+                            ) {
+                                M3GroupHeader(
+                                    "${repo.name} · ${entries.size} sources",
+                                    Modifier.weight(1f)
+                                )
+                                TextButton(
+                                    onClick = { onOpenRepo(repo.id) }
+                                ) { Text("Open") }
+                            }
+                            // Gap 38: the "last checked" line.
+                            val checked = checkedLine(
+                                repo.lastFetchedAt
                             )
-                            TextButton(
-                                onClick = { onOpenRepo(repo.id) }
-                            ) { Text("Open") }
+                            if (checked.isNotBlank()) {
+                                Text(
+                                    checked,
+                                    style = MaterialTheme.typography
+                                        .bodySmall,
+                                    color = MaterialTheme.colorScheme
+                                        .onSurfaceVariant
+                                )
+                            }
+                            Row(
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(4.dp)
+                            ) {
+                                // Gap 37: pin / unpin.
+                                TextButton(
+                                    onClick = { onTogglePin(repo) }
+                                ) {
+                                    Text(
+                                        if (repo.id in
+                                            state.pinnedRepoIds
+                                        ) {
+                                            "Pinned"
+                                        } else {
+                                            "Pin"
+                                        }
+                                    )
+                                }
+                                // Gap 36: remove (with confirm) —
+                                // the link repository keeps
+                                // Nocturne's exemption.
+                                if (repo.indexUrl !=
+                                    RepoManager.LINK_REPO_URL
+                                ) {
+                                    TextButton(
+                                        onClick = {
+                                            pendingRemoval = repo
+                                        }
+                                    ) {
+                                        Text(
+                                            "Remove",
+                                            color = MaterialTheme
+                                                .colorScheme.error
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                     items(entries, key = { "m3store-${it.key}" }) { entry ->
@@ -1011,6 +1089,32 @@ private fun M3SourceStore(
             },
             dismissButton = {
                 TextButton(onClick = { pendingInstall = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // Gap 36: remove-repository confirm — same words and same
+    // outcome as the shared Nocturne dialog.
+    pendingRemoval?.let { repo ->
+        AlertDialog(
+            onDismissRequest = { pendingRemoval = null },
+            title = { Text("Remove “${repo.name}”?") },
+            text = {
+                Text(
+                    "Its sources will be uninstalled. Books you " +
+                        "already downloaded stay in your library."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingRemoval = null
+                    onRemoveRepo(repo)
+                }) { Text("Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRemoval = null }) {
                     Text("Cancel")
                 }
             }

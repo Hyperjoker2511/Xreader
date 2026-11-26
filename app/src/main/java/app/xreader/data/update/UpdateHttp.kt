@@ -34,7 +34,11 @@ interface UpdateHttp {
      * Streams [url] into [target], reporting
      * (downloadedBytes, totalBytesOrMinusOne) as it goes.
      * False on any failure; the partial file is the caller's
-     * to delete.
+     * to delete. Progress reports are CONFLATED (Patch B,
+     * B-6): at most one per whole-percent step (or per
+     * 250 ms when the length is unknown), plus a final exact
+     * report — never one per read chunk, because consumers
+     * do real work (state, notifications) per report.
      */
     suspend fun download(
         url: String,
@@ -98,16 +102,58 @@ class OkHttpUpdateHttp(
                 val total = body.contentLength()
                 target.parentFile?.mkdirs()
                 body.byteStream().use { input ->
-                    target.outputStream().buffered().use { output ->
+                    target.outputStream().buffered(64 * 1024).use { output ->
                         val buffer = ByteArray(64 * 1024)
                         var downloaded = 0L
+                        // Patch B (B-6, B4a): progress is
+                        // CONFLATED here, at the byte loop —
+                        // never one callback per chunk. The
+                        // pre-fix loop fired onProgress on
+                        // every 64 KiB read (~1,100 callbacks
+                        // for a ~70 MB APK), and every
+                        // callback ran a StateFlow emission
+                        // plus a full notification rebuild +
+                        // NotificationManager IPC in
+                        // UpdateDownloadManager/UpdateNotifier,
+                        // synchronously on this IO thread —
+                        // the byte loop was serialised behind
+                        // the progress pipeline and the
+                        // download crawled on every phone.
+                        // Reports now fire only when the
+                        // whole-percent bucket changes, or
+                        // 250 ms have passed (unknown-length
+                        // bodies), and always once at the end
+                        // with the true final byte count —
+                        // real bytes, monotonic, honest 100%.
+                        var lastReportedPercent = -1
+                        var lastReportNanos = 0L
                         while (true) {
                             val read = input.read(buffer)
                             if (read < 0) break
                             output.write(buffer, 0, read)
                             downloaded += read
-                            onProgress(downloaded, total)
+                            val percent = if (total > 0) {
+                                ((downloaded * 100) / total).toInt()
+                            } else {
+                                -1
+                            }
+                            val nowNanos = System.nanoTime()
+                            val due = if (total > 0) {
+                                percent != lastReportedPercent
+                            } else {
+                                nowNanos - lastReportNanos >=
+                                    250_000_000L
+                            }
+                            if (due) {
+                                lastReportedPercent = percent
+                                lastReportNanos = nowNanos
+                                onProgress(downloaded, total)
+                            }
                         }
+                        // The final, exact state — the loop's
+                        // last bucketed report may sit one
+                        // chunk behind the true end.
+                        onProgress(downloaded, total)
                     }
                 }
                 total <= 0 || target.length() == total

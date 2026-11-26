@@ -53,6 +53,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExpandedFullScreenSearchBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -1526,6 +1527,38 @@ private fun androidx.compose.foundation.lazy.LazyListScope.searchGroupRows(
     }
 }
 
+/** Patch B (gap 28): the 18+ quick toggle in Material 3 form —
+ * a FilterChip carrying the SAME ContentVisibility preference
+ * and the SAME toggle step as Nocturne's AdultVisibilityToggle
+ * (SourcesViewModel.toggleAdultVisibility). ON = showing
+ * everything; the three-way control stays in Customise. */
+@Composable
+private fun M3AdultVisibilityToggle(
+    visibility: app.xreader.data.extension.ContentVisibility,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val showing = visibility ==
+        app.xreader.data.extension.ContentVisibility.SHOW_ALL
+    FilterChip(
+        selected = showing,
+        onClick = onToggle,
+        label = { Text("18+") },
+        leadingIcon = if (showing) {
+            {
+                Icon(
+                    Icons.Filled.Check,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        } else {
+            null
+        },
+        modifier = modifier
+    )
+}
+
 // ── Code 123 (R2): the Editorial Explore — the approved ────
 // Paper & Sage copy, alive (DESIGN-M3-EXPLORE-V6-PAPER-COPY).
 // Every literal the prototype hard-coded is the app's real
@@ -1536,7 +1569,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.searchGroupRows(
 // his sources grouped by provenance (K10), and each card's
 // health line is the source's real health record.
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(
+    ExperimentalMaterial3Api::class,
+    androidx.compose.foundation.ExperimentalFoundationApi::class
+)
 @Composable
 private fun EditorialExploreContent(
     state: SourcesUiState,
@@ -1564,6 +1600,9 @@ private fun EditorialExploreContent(
 ) {
     val scheme = MaterialTheme.colorScheme
     var query by remember { mutableStateOf(searchState.query) }
+    // Patch B (gap 29): Recent searches show only while the
+    // search field has focus — the Nocturne flow's rule.
+    var searchFocused by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(query) {
         if (query != searchState.query) searchViewModel.setQuery(query)
     }
@@ -1603,7 +1642,8 @@ private fun EditorialExploreContent(
                     textStyle = MaterialTheme.typography.bodyLarge
                         .copy(color = scheme.onSurface),
                     cursorBrush = SolidColor(scheme.primary),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f)
+                        .onFocusChanged { searchFocused = it.isFocused },
                     decorationBox = { inner ->
                         if (query.isEmpty()) {
                             Text(
@@ -1636,6 +1676,90 @@ private fun EditorialExploreContent(
                 }
             }
         }
+        // ── Patch B (gap 28): the 18+ quick toggle, in the ──
+        // header seat the Nocturne face gives it (always
+        // visible beside the search field, search or not).
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .padding(top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "Adult sources",
+                style = MaterialTheme.typography.bodyMedium,
+                color = scheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+            M3AdultVisibilityToggle(
+                visibility = state.contentVisibility,
+                onToggle = { viewModel.toggleAdultVisibility() }
+            )
+        }
+        // ── Patch B (gap 29): Recent searches — last 5, tap ──
+        // to re-run, hold to remove, Clear all; only while the
+        // field is focused and no search is on screen (the
+        // Nocturne flow's rules, SourcesScreen's shipped list).
+        if (!searchState.searched && searchFocused &&
+            searchState.recents.isNotEmpty()
+        ) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .padding(top = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Recent searches",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = scheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f)
+                    )
+                    TextButton(
+                        onClick = { searchViewModel.clearRecents() }
+                    ) { Text("Clear all") }
+                }
+                searchState.recents.take(5).forEach { recent ->
+                    Surface(
+                        color = scheme.surfaceContainerLow,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
+                                    query = recent
+                                    searchViewModel.setQuery(recent)
+                                    searchViewModel.search()
+                                },
+                                onLongClick = {
+                                    searchViewModel.removeRecent(recent)
+                                }
+                            )
+                    ) {
+                        Text(
+                            recent,
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.padding(
+                                horizontal = 12.dp, vertical = 10.dp
+                            )
+                        )
+                    }
+                }
+                Text(
+                    "Tap one to search again — hold one to " +
+                        "remove it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = scheme.onSurfaceVariant
+                )
+            }
+        }
         // ── S8: live results replace the page ───────────────
         if (searchState.searched) {
             M3SearchResults(
@@ -1646,7 +1770,8 @@ private fun EditorialExploreContent(
                     searchViewModel.openBook(group, book)
                 },
                 onOpenSource = onOpenSource,
-                onRetry = { searchViewModel.search() }
+                onRetry = { searchViewModel.search() },
+                onCancel = { searchViewModel.cancelSearch() }
             )
             return@Column
         }
@@ -2037,6 +2162,12 @@ private fun EditorialExploreContent(
                                 state = state,
                                 rotationIndex = indexInGroup,
                                 ratingBadge = ratingBadgeOf(ext),
+                                onDetails = { onOpenExtension(ext.id) },
+                                onUpdate = {
+                                    state.updates[ext.packageId]?.let {
+                                        viewModel.applyUpdate(it)
+                                    }
+                                },
                                 onClick = {
                                     val ids = ext.sourceIds.split(",")
                                         .map { it.trim() }
@@ -2231,7 +2362,15 @@ private fun EditorialSourceCard(
     rotationIndex: Int,
     ratingBadge: String?,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Patch B (gap 33): the visible Details door — separate
+     * from the card's catalogue tap, wired like Nocturne's
+     * per-row Details button. */
+    onDetails: () -> Unit = {},
+    /** Patch B (gap 34): applies the pending extension update
+     * (the caller resolves state.updates, as Nocturne's row
+     * caller does). Rendered only when an update is pending. */
+    onUpdate: () -> Unit = {}
 ) {
     val scheme = MaterialTheme.colorScheme
     val ids = ext.sourceIds.split(",")
@@ -2247,6 +2386,24 @@ private fun EditorialSourceCard(
         app.xreader.data.extension.SourceHealthState.BROKEN
     val languageLabel = ext.languages.split(",")
         .firstOrNull()?.uppercase()?.takeIf { it.isNotBlank() }
+    // Patch B (gaps 34/35): the same pending/session facts
+    // Nocturne's SourceRow reads — an off or re-trust source
+    // must not look healthy on this face either.
+    val hasUpdate = state.updates[ext.packageId] != null
+    val hasPending = state.pendings.containsKey(ext.packageId)
+    val sessionWord = firstSource?.let {
+        state.sessionWords[
+            app.xreader.data.extension.SourceHealthRecord.key(ext.id, it)
+        ]
+    }
+    val alert: Pair<String, androidx.compose.ui.graphics.Color>? =
+        when {
+            ext.trustState == TrustState.CHANGED_REQUIRES_RETRUST ->
+                "Needs re-trust" to scheme.error
+            hasPending -> "Update waiting" to scheme.error
+            !ext.enabled -> "Off" to scheme.onSurfaceVariant
+            else -> null
+        }
     Surface(
         color = scheme.surfaceContainerLow,
         shape = RoundedCornerShape(24.dp),
@@ -2322,13 +2479,29 @@ private fun EditorialSourceCard(
                     }
                 }
                 Text(
-                    healthWord,
+                    // Gap 35: the session word rides the same
+                    // line when it adds information the health
+                    // word doesn't carry (Nocturne's rule).
+                    listOfNotNull(
+                        healthWord,
+                        sessionWord?.takeIf { it != healthWord }
+                    ).joinToString(" · "),
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontSize = 11.sp
                     ),
                     color = scheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (alert != null) {
+                Text(
+                    alert.first,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontWeight = FontWeight.SemiBold
+                    ),
+                    color = alert.second,
+                    modifier = Modifier.padding(top = 4.dp)
                 )
             }
             if (broken) {
@@ -2346,6 +2519,18 @@ private fun EditorialSourceCard(
                     color = scheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
                 )
+            }
+            // Patch B (gaps 33/34): the row's own doors —
+            // Update only while an extension update is pending,
+            // Details always, both separate from the card tap.
+            Row(
+                Modifier.padding(top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                if (hasUpdate) {
+                    TextButton(onClick = onUpdate) { Text("Update") }
+                }
+                TextButton(onClick = onDetails) { Text("Details") }
             }
         }
     }

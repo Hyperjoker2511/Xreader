@@ -492,7 +492,11 @@ internal fun M3SearchResults(
     onOpenGroupBook: (GlobalSearchGroup, app.xreader.extensionapi.SourceBook) -> Unit,
     onOpenSource: (extensionId: Long, sourceId: String) -> Unit,
     onRetry: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Patch B (gap 30): stop the fan-out while a search runs —
+     * the same cancel path Nocturne's Cancel button calls
+     * (GlobalSearchViewModel.cancelSearch). */
+    onCancel: () -> Unit = {}
 ) {
     // Code 124 (D20): the results' tail repays the shell's
     // dock clearance (the Material 3 design's floating pill
@@ -513,15 +517,22 @@ internal fun M3SearchResults(
                     androidx.compose.material3.LinearWavyProgressIndicator(
                         Modifier.fillMaxWidth()
                     )
-                    Text(
-                        SearchProgressLine.text(
-                            done = state.progressDone,
-                            total = state.progressTotal,
-                            searchingLibrary = state.searchingLibrary
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            SearchProgressLine.text(
+                                done = state.progressDone,
+                                total = state.progressTotal,
+                                searchingLibrary = state.searchingLibrary
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // Gap 30: Cancel while a search runs.
+                        androidx.compose.material3.TextButton(
+                            onClick = onCancel
+                        ) { Text("Cancel") }
+                    }
                 }
             }
         }
@@ -553,6 +564,8 @@ internal fun M3SearchResults(
                     author = hit.chapterTitle,
                     coverModel = null,
                     inLibrary = true,
+                    // Gap 31: the matched-text snippet.
+                    snippet = hit.snippet,
                     onClick = { onOpenLibraryBook(hit.bookId) }
                 )
             }
@@ -587,12 +600,19 @@ internal fun M3SearchResults(
             ) { book ->
                 val workKey = app.xreader.data.extension.WorkMatcher
                     .normaliseTitle(book.title)
+                val copies = state.workCounts[workKey] ?: 1
                 M3WideBookCard(
                     title = book.title,
                     author = book.author?.takeIf { it.isNotBlank() },
                     coverModel = book.coverUrl
                         ?.takeIf { it.isNotBlank() },
                     inLibrary = workKey in state.libraryKeys,
+                    // Gap 32: the "On N sources" count.
+                    metaLine = if (copies > 1) {
+                        "On $copies sources"
+                    } else {
+                        null
+                    },
                     onClick = { onOpenGroupBook(group, book) }
                 )
             }

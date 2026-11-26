@@ -53,13 +53,35 @@ fun UpdateProgressBlock(
                 }
             }
         }
-        UpdateDownloadPhase.Verifying ->
-            Text(
-                "Checking the downloaded file…",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = modifier
-            )
+        UpdateDownloadPhase.Verifying -> {
+            // Patch B (B-6, B4b): in the Material 3 face the
+            // verifying state carries the face's indeterminate
+            // wavy indicator, like its downloading state;
+            // Nocturne keeps the plain line it has always had.
+            if (app.xreader.ui.theme.isM3FamilyDesign()) {
+                Column(
+                    modifier,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    app.xreader.ui.common
+                        .DesignLinearProgressIndeterminate(
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    Text(
+                        "Checking the downloaded file…",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else {
+                Text(
+                    "Checking the downloaded file…",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = modifier
+                )
+            }
+        }
         is UpdateDownloadPhase.Ready ->
             Text(
                 "Downloaded and checked — ready to install.",
