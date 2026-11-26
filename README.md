@@ -4,11 +4,11 @@
 
 <h1 align="center">Xreader</h1>
 
-<p align="center"><strong>A beautiful reader for novels and manga</strong> — pure-black AMOLED design, real frosted glass, and a source engine that learns new sites on its own.</p>
+<p align="center"><strong>One reader for novels, manga and your own books</strong> — two designs (Material 3 and Nocturne), sources that learn new sites on their own, and your library kept exactly the way you like it.</p>
 
 <p align="center">
 
-> **Where things stand: this is our stable version** — fully tested and ready for everyone. Novels and manga are both fully supported. Novels read through built-in sources, provider packs and any site you add by link; manga reads through extension repositories in a dedicated image reader with tap zones, reading modes and border cropping.
+> **Where things stand: v1.7.0 is the current release** — fully tested and ready for everyone. Novels and manga are both fully supported. Novels read through built-in sources, provider packs and any site you add by link; manga reads through extension repositories in a dedicated image reader with tap zones, reading modes and border cropping. Your own book files read in the same app, in the same library.
 
 [![Release](https://img.shields.io/github/v/release/Hyperjoker2511/Xreader)](https://github.com/Hyperjoker2511/Xreader/releases)
 [![Licence](https://img.shields.io/github/license/Hyperjoker2511/Xreader)](LICENSE)
@@ -17,18 +17,21 @@
 
 ## Download
 
-Get the latest APK from the [**Releases**](https://github.com/Hyperjoker2511/Xreader/releases) page. Enable "install from this source" for your browser or file manager when Android asks, then open the file. Upgrades keep your library, progress, downloads and settings — the signing key never changes.
+Get **v1.7.0** from the [**Releases**](https://github.com/Hyperjoker2511/Xreader/releases) page — or let the app update itself: Xreader checks for new versions and offers them in-app. Enable "install from this source" for your browser or file manager when Android asks, then open the file. Upgrades keep your library, progress, downloads and settings — the signing key never changes.
 
 ## What it does
 
-- **36 built-in novel sources**, each verified end to end (catalogue, search, book, chapter list, chapter text) before it ships — Korean, Chinese and Japanese novels in translation, plus English originals.
+- **Built-in novel sources**, each verified end to end (catalogue, search, book, chapter list, chapter text) before it ships — Korean, Chinese and Japanese novels in translation, plus English originals.
 - **Add any site by pasting its link.** Xreader studies the site and learns how to read it — catalogue, books, chapters and search — always in the app's own native screens, never a bare web page. Sites that need a sign-in show their own login page once; the app securely reuses that session afterwards.
 - **Repositories** — add source repositories and browse their full catalogues per repo, with search and language filters.
-- **Manga, properly** — 1,400+ manga sources through extension repositories, in a dedicated reader with smooth zoom, tap zones and reading modes. They live in Explore under **Manga sources** — the app checks for source updates itself and tells you when one is ready.
-- **Your own books** — open EPUB and PDF files from your device and read them in the same calm reader, exactly as published.
-- **A reader built for long novels** — progressive chapter loading (a book opens after the first chapters, the rest load as you read), true chapter numbers everywhere, custom fonts and paragraph spacing, themes, text-to-speech, and offline downloads with resume.
-- **AI features with your own provider** — summaries, catch-up and lore with Gemini or compatible providers, plus offline translation. Your keys stay encrypted on your device.
-- **Sign-in, handled honestly** — some sites keep chapters behind a second, short-lived key their own reader renews quietly; Xreader renews it the same way. When a site is down, rate-limiting, or unreachable, the app says exactly that — never a fake "empty" and never scrambled text dressed up as a chapter.
+- **Manga, properly** — a huge catalogue of manga sources through extension repositories, in a dedicated reader with smooth zoom, tap zones and reading modes. They live in Explore under **Manga sources** — the app checks for source updates itself and tells you when one is ready.
+- **Your own books** — EPUB, PDF, DOCX, TXT, MOBI, FB2, CBZ and more, opened from your device and read in the same calm reader, with each book's own table of contents, highlights and notes. TXT books get proper chapter detection and encodings read for you (GBK, Big5, Russian and more).
+- **A library with five statuses** — Reading · On hold · Plan to read · Completed · Dropped — plus favourites, history with your real reading numbers, and a profile with levels and streaks.
+- **A reader built for long novels** — progressive chapter loading (a book opens after the first chapters, the rest load as you read), true chapter numbers everywhere, custom fonts and paragraph spacing, themes, and offline downloads with resume.
+- **Read aloud** — your device's voice, or an online voice when you want a better one; it speaks the book's original text and keeps going chapter after chapter.
+- **Ask AI, on its own page** — summaries, catch-up, translation, illustrations and a lore chat that remembers your book, with your own provider (Gemini or compatible). Your keys stay encrypted on your device.
+- **Backup & sync** — keep your library safe in a backup file, on Google Drive, or on your own WebDAV server.
+- **Sign-in, handled honestly** — some sites keep chapters behind a second, short-lived key their own reader renews quietly; Xreader renews it the same way. When a source fails, the app names the source and the reason — didn't answer, couldn't be read, couldn't be reached — with Retry beside it. Never a fake "empty" and never scrambled text dressed up as a chapter.
 
 ## Screenshots
 
@@ -37,16 +40,18 @@ Get the latest APK from the [**Releases**](https://github.com/Hyperjoker2511/Xre
 </p>
 <p align="center">
   <img src="docs/images/m3/reader.png" width="250" alt="The reader — clean prose on pure black" />
-</p>
-<p align="center">
-  <img src="History.jpg" width="250" alt="History — Reading pulse with your real numbers" />
-  <img src="Downloads.jpg" width="250" alt="Downloads — offline storage at a glance" />
   <img src="docs/images/m3/profile.png" width="250" alt="Profile — levels, streaks and avatar colours" />
 </p>
 
 ## Design
 
-**Nocturne Violet** — a pure-black `#000000` canvas built for AMOLED screens, electric violet accents, a floating glass dock with real backdrop blur, and one calm rule everywhere: *easy to understand, beautiful to see.* Deep customisation lives in one dedicated space; the defaults are designed to need none.
+Two complete designs, one app — every feature exists in both; only the look changes.
+
+**Material 3** — the default for new installs. Google's Material 3 Expressive, coloured from your phone's own palette or any colour you pick.
+
+**Nocturne** — a pure-black `#000000` canvas built for AMOLED screens, violet accents, and a floating glass dock with real backdrop blur.
+
+An update never switches your design — what you chose stays chosen. Deep customisation lives in one dedicated space, Customise; the defaults are designed to need none. One calm rule everywhere: *easy to understand, beautiful to see.*
 
 ## Privacy
 
