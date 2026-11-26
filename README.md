@@ -33,7 +33,7 @@ Get the latest APK from the [**Releases**](https://github.com/Hyperjoker2511/Xre
 ## Screenshots
 
 <p align="center">
-  <img src="Reader.jpg" width="250" alt="The reader — clean prose on pure black" />
+  <img src="docs/images/m3/reader.png" width="250" alt="The reader — clean prose on pure black" />
 </p>
 <p align="center">
   <img src="History.jpg" width="250" alt="History — Reading pulse with your real numbers" />
