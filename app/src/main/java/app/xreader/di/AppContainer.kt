@@ -1687,6 +1687,15 @@ class AppContainer(
             // source list — offline, idempotent, and it never
             // touches a row the user has changed (RepoManager).
             runCatching { repoManager.installBundledDefaults() }
+            // Patch A (code 131): re-apply any stored source
+            // packs over the bundled definitions the pass
+            // above just settled — so an epoch bump that
+            // displaced a pack definition is healed on this
+            // same launch, and a pack row's permissions end
+            // the startup sequence derived from the pack.
+            // Offline, idempotent; with no stored pack it is
+            // a no-op and the bundled floor stands untouched.
+            runCatching { repoManager.reapplyStoredSourcePacks() }
             // Manga programme (M1): the Keiyoushi repository
             // row is pre-registered (idempotent, offline — the
             // row insert only; its site list loads on demand
@@ -2346,6 +2355,26 @@ class AppContainer(
             prefs = updatePrefs,
             installedVersion = { app.xreader.BuildConfig.VERSION_NAME },
             installedVersionCode = { app.xreader.BuildConfig.VERSION_CODE }
+        )
+    }
+
+    /** Patch A (code 131): the source-pack loader — fetches
+     * validated definition packs for bundled sources from
+     * the repo's source-pack/ folder on the updater's daily
+     * rhythm (triggered from AppUpdateViewModel.onAppOpen,
+     * the updater auto-check's own trigger site; the pass
+     * itself runs fire-and-forget on [appScope]) and applies
+     * them through RepoManager's overlay seam. No UI. */
+    val sourcePackLoader: app.xreader.data.extension.SourcePackLoader by lazy {
+        app.xreader.data.extension.SourcePackLoader(
+            http = app.xreader.data.update.OkHttpUpdateHttp(),
+            prefs = updatePrefs,
+            store = extensionStore,
+            scope = appScope,
+            applyPack = { pack, previousPack ->
+                repoManager.applySourcePackOverlay(pack, previousPack)
+                Unit
+            }
         )
     }
 

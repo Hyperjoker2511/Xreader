@@ -1844,9 +1844,16 @@ class DeclarativeSource(
                     val html = paginationFragmentHtml(response.body, p)
                         ?: return@runCatching null
                     val fragment = Jsoup.parseBodyFragment(html, pageUrl)
+                    // Patch A (code 131): the fragment road
+                    // honours the endpoint's STATED total too —
+                    // the response body is the same JSON
+                    // envelope the fragment was extracted from,
+                    // so its declared total (jsonTotalPath)
+                    // ends the walk exactly, like the
+                    // jsonArrayPath branch above.
                     PageFetch(
                         rowsFromElements(selectFragmentRows(fragment), pageUrl),
-                        null
+                        fragmentRoadStatedTotal(response.body, p)
                     )
                 }
             }.getOrElse { error ->
@@ -3694,9 +3701,14 @@ class DeclarativeSource(
                     val html = paginationFragmentHtml(response.body, pagination)
                         ?: return@runCatching null
                     val fragment = Jsoup.parseBodyFragment(html, pageUrl)
+                    // Patch A (code 131): the fragment road
+                    // honours the endpoint's STATED total too —
+                    // resolved from the same JSON envelope the
+                    // fragment was extracted from, so the walk
+                    // ends exactly at the declared total.
                     PageFetch(
                         rowsFromElements(selectFragmentRows(fragment), pageUrl),
-                        null
+                        fragmentRoadStatedTotal(response.body, pagination)
                     )
                 }
             }.getOrElse { error ->
@@ -3791,6 +3803,30 @@ class DeclarativeSource(
             append('\n')
         }
         append(doc.outerHtml())
+    }
+
+    /**
+     * Patch A (code 131): the chapter total a fragment-road
+     * (jsonHtmlField) endpoint STATES in its response envelope
+     * — the pagination's [ChapterListPagination.jsonTotalPath]
+     * resolved over the response body with the same
+     * [EmbeddedJson.resolve] + JsonPrimitive→Int extraction the
+     * jsonArrayPath branch uses. Null when the spec declares
+     * no total path, the body is not a JSON envelope (a raw
+     * HTML fragment road), or the path resolves to no integer
+     * — every walk then keeps its existing end-of-list
+     * heuristics, exactly as before.
+     */
+    private fun fragmentRoadStatedTotal(
+        body: String,
+        pagination: ChapterListPagination
+    ): Int? {
+        val path = pagination.jsonTotalPath
+            ?.takeIf { it.isNotBlank() } ?: return null
+        val root = runCatching { ajaxJson.parseToJsonElement(body) }
+            .getOrNull() ?: return null
+        return (EmbeddedJson.resolve(root, path) as? JsonPrimitive)
+            ?.contentOrNull?.toIntOrNull()
     }
 
     /** A pagination response's rows HTML: the body itself, or the

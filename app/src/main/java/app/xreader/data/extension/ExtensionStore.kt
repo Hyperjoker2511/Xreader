@@ -204,6 +204,19 @@ class ExtensionStore(private val filesDir: File) {
             ?.map { it.name.removeSuffix(".json") }
             ?: emptyList()
 
+    /** Patch A (code 131): one downloaded SOURCE PACK's
+     * stored document — the validated [DeclarativeConfig]
+     * JSON for the bundled source whose config id is
+     * [configId], kept under `source-packs/` in this store.
+     * Written only through [writeText] (temp file + rename)
+     * and only after the document has validated whole (see
+     * SourcePackLoader), so the file on disk is always the
+     * last GOOD pack: a failed or corrupt download never
+     * reaches it. */
+    fun sourcePackFile(configId: String): File =
+        File(root, "source-packs").apply { mkdirs() }
+            .let { File(it, "${configId.sanitise()}.json") }
+
     /** v1.3.2 (scope E): the persisted site list of a FOREIGN
      * repository (another app's index) — foreign repos get their
      * own screen long after the add flow that detected them. */

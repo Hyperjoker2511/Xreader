@@ -102,6 +102,13 @@ class AppUpdateViewModel(private val container: AppContainer) : ViewModel() {
     fun onAppOpen() {
         if (appOpenHandled) return
         appOpenHandled = true
+        // Patch A (code 131): the source-pack loader's daily
+        // pass rides THIS trigger — the same app-open site as
+        // the updater's daily auto-check below, no second
+        // scheduler. The call only launches the pass on the
+        // app scope (its own once-a-day stamp governs it);
+        // it never blocks or fails the update check.
+        runCatching { container.sourcePackLoader.triggerDailyPass() }
         viewModelScope.launch {
             downloads.sweepOrphanedDownloads()
             repo.cachedRelease()?.let { cached ->

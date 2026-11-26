@@ -54,10 +54,27 @@ class UpdatePrefs(private val store: DataStore<Preferences>) {
         store.edit { it[KEY_CACHED_RELEASE] = json }
     }
 
+    /** Patch A (code 131): ISO local day of the last
+     * source-pack pass that reached the pack index, "" if
+     * never. The pack loader's OWN once-a-day stamp — it
+     * rides this store (the updater's bookkeeping home) but
+     * is a separate key, so the two daily rhythms never
+     * stamp or clear each other. A pass that could not
+     * reach the index does not stamp, so a later app open
+     * the same day may retry. */
+    suspend fun sourcePackLastCheckDay(): String =
+        store.data.first()[KEY_SOURCE_PACK_LAST_CHECK_DAY] ?: ""
+
+    suspend fun setSourcePackLastCheckDay(day: String) {
+        store.edit { it[KEY_SOURCE_PACK_LAST_CHECK_DAY] = day }
+    }
+
     private companion object {
         val KEY_AUTO_CHECK = booleanPreferencesKey("update.auto_check")
         val KEY_LAST_CHECK_DAY = stringPreferencesKey("update.last_check_day")
         val KEY_CARD_SHOWN_DAY = stringPreferencesKey("update.card_shown_day")
         val KEY_CACHED_RELEASE = stringPreferencesKey("update.cached_release_json")
+        val KEY_SOURCE_PACK_LAST_CHECK_DAY =
+            stringPreferencesKey("source_pack.last_check_day")
     }
 }

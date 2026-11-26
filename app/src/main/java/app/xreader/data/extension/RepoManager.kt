@@ -1430,6 +1430,192 @@ class RepoManager(
         )
     }
 
+    // ── Patch A (code 131): source-pack overlay ─────────────
+    //
+    // The application seam for downloaded source packs (see
+    // SourcePackLoader). A stored, validated pack overlays
+    // the DEFINITION of its bundled row through the SAME
+    // write the epoch REPLACE branch above performs
+    // (definition file rewritten via DeclarativeFingerprints
+    // .encode, permissions re-derived from the effective
+    // config, row updated in place, service invalidated).
+    // The invariants, enforced here:
+    //  - the row must already exist (looked up by its bundled
+    //    package id): a pack NEVER creates a row, never
+    //    deletes one, and never touches enabled state, the
+    //    user's books, or any non-bundled row;
+    //  - the overlay only moves a stored definition that IS
+    //    the shipped bundled definition, the previous pack,
+    //    or the pack itself — a definition the user changed
+    //    themselves (Repair) is left exactly as it is, no
+    //    worse than the epoch mechanism treats it: the next
+    //    epoch bump displaces it to the shipped definition,
+    //    and the overlay re-applies on top of that (the
+    //    startup sequence runs the bundled pass first, then
+    //    [reapplyStoredSourcePacks], on every launch);
+    //  - with no stored pack, nothing here runs at all: the
+    //    bundled definitions are the floor, exactly as
+    //    before this patch.
+
+    /**
+     * Apply one validated [pack] (its id is the bundled
+     * spec's configId, e.g. "freewebnovel") over its bundled
+     * row's stored definition. [previousPack] is the pack
+     * stored before it, when one existed — a stored
+     * definition equal to the previous pack's effective form
+     * is a pack-managed definition and may move to the new
+     * pack. Returns true when the stored definition was
+     * replaced. Silent no-op (false) in every other case.
+     */
+    suspend fun applySourcePackOverlay(
+        pack: DeclarativeConfig,
+        previousPack: DeclarativeConfig?
+    ): Boolean = withContext(Dispatchers.IO) {
+        applySourcePackOverlayOnIo(pack, previousPack)
+    }
+
+    /**
+     * Re-apply every stored pack over its bundled row — run
+     * once per launch by the startup sequence, AFTER
+     * [installBundledDefaults], so an epoch bump that
+     * displaced a pack definition is healed on that same
+     * launch. Returns how many definitions were replaced.
+     */
+    suspend fun reapplyStoredSourcePacks(): Int =
+        withContext(Dispatchers.IO) {
+            var replaced = 0
+            for (spec in BundledDefaults.SPECS) {
+                try {
+                    val raw = store.readText(
+                        store.sourcePackFile(spec.configId)
+                    ) ?: continue
+                    val pack = SourcePackCodec.parseAndValidate(
+                        raw, spec.configId
+                    ) ?: continue
+                    if (applySourcePackOverlayOnIo(pack, null)) {
+                        replaced++
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    DiagnosticLog.record(
+                        "source-pack",
+                        "stored pack re-apply failed for " +
+                            "${spec.configId}: " +
+                            e.javaClass.simpleName,
+                        spec.configId
+                    )
+                }
+            }
+            replaced
+        }
+
+    /** The overlay itself — always entered through
+     * [applySourcePackOverlay] / [reapplyStoredSourcePacks],
+     * which put it on [Dispatchers.IO]. */
+    private suspend fun applySourcePackOverlayOnIo(
+        pack: DeclarativeConfig,
+        previousPack: DeclarativeConfig?
+    ): Boolean {
+        val bundled = BundledDefaults.configs()
+            .firstOrNull { it.id == "bundled-${pack.id}" }
+            ?: return false
+        // The pack speaks in configIds ("freewebnovel"); the
+        // stored bundled definition carries the row's full id
+        // ("bundled-freewebnovel") and the shipped name, and
+        // is maintainer-verified like every bundled config.
+        val effective = pack.copy(
+            id = bundled.id,
+            name = bundled.name,
+            maintainerVerified = true
+        )
+        val packageId = "bundled.${bundled.id}"
+        val existing = extensionDao.getByPackageId(packageId)
+            ?: return false
+        val storedText = store.readText(store.definitionFile(packageId))
+            ?: return false
+        val stored = DeclarativeFingerprints.decode(storedText)
+        if (stored.size != 1) return false
+        val storedFingerprint = DeclarativeFingerprints.of(stored)
+        val effectiveFingerprint =
+            DeclarativeFingerprints.of(listOf(effective))
+        if (storedFingerprint == effectiveFingerprint) {
+            // Already the pack's definition: only a
+            // permissions drift (e.g. the bundled pass's
+            // CURRENT-branch heal re-derived them from the
+            // shipped config earlier this launch) is repaired.
+            val derived = bundledPermissions(effective)
+            if (existing.permissionsJson != derived.encode() &&
+                ExtensionPermissions.parse(existing.permissionsJson) !=
+                derived
+            ) {
+                extensionDao.update(
+                    existing.copy(
+                        permissionsJson = derived.encode(),
+                        updatedAt = nowMs()
+                    )
+                )
+                service.invalidate(existing.id)
+            }
+            return false
+        }
+        // Only pack-managed or shipped definitions may move:
+        // the shipped bundled definition, or the previous
+        // pack's effective form. Anything else is the user's
+        // own change to this row and stands.
+        val movable = mutableSetOf(
+            DeclarativeFingerprints.of(listOf(bundled))
+        )
+        if (previousPack != null) {
+            movable += DeclarativeFingerprints.of(
+                listOf(
+                    previousPack.copy(
+                        id = bundled.id,
+                        name = bundled.name,
+                        maintainerVerified = true
+                    )
+                )
+            )
+        }
+        if (storedFingerprint !in movable) {
+            DiagnosticLog.record(
+                "source-pack",
+                "pack overlay skipped for ${pack.id}: the " +
+                    "stored definition is neither the shipped " +
+                    "one nor the previous pack (user-changed)",
+                pack.id
+            )
+            return false
+        }
+        // Replace wholesale, exactly as the epoch REPLACE
+        // branch does: definition file, re-derived
+        // permissions, row bookkeeping. Enabled state and
+        // everything outside this row are untouched.
+        store.writeText(
+            store.definitionFile(packageId),
+            DeclarativeFingerprints.encode(listOf(effective))
+        )
+        val permissions = bundledPermissions(effective)
+        extensionDao.update(
+            existing.copy(
+                displayName = effective.name,
+                versionCode = existing.versionCode + 1,
+                sha256 = effectiveFingerprint,
+                sourceIds = effective.id,
+                permissionsJson = permissions.encode(),
+                updatedAt = nowMs()
+            )
+        )
+        MirrorHosts.register(effective.baseUrl, effective.backupHosts)
+        service.invalidate(existing.id)
+        DiagnosticLog.record(
+            "source-pack",
+            "pack definition applied for ${pack.id}",
+            pack.id
+        )
+        return true
+    }
+
     // ── internals ───────────────────────────────────────────────────
 
     /** Downloaded/derived content of one package, ready to write. */
