@@ -1,0 +1,55 @@
+{
+  "id": "freewebnovel",
+  "name": "FreeWebNovel",
+  "lang": "en",
+  "baseUrl": "https://freewebnovel.com",
+  "search": {
+    "cover": "img@src",
+    "link": "h3.tit > a@href",
+    "method": "GET",
+    "results": "div.li-row",
+    "title": "h3.tit > a@title",
+    "url": "https://freewebnovel.com/search?keyword={query}"
+  },
+  "popular": {
+    "cover": "img@src",
+    "link": "h3.tit > a@href",
+    "method": "GET",
+    "results": "div.li-row",
+    "title": "h3.tit > a@title",
+    "url": "https://freewebnovel.com/sort/most-popular/{page}"
+  },
+  "latest": {
+    "cover": "img@src",
+    "link": "h3.tit > a@href",
+    "method": "GET",
+    "results": "div.li-row",
+    "title": "h3.tit > a@title",
+    "url": "https://freewebnovel.com/sort/latest-release/{page}"
+  },
+  "details": {
+    "author": "a[href^='/author/']",
+    "chapters": {
+      "link": "@href",
+      "list": "li:has(> span.glyphicon-book) > a.con",
+      "name": "@text",
+      "pagination": {
+        "bookIdPattern": "",
+        "headers": {
+          "X-Requested-With": "XMLHttpRequest"
+        },
+        "jsonHtmlField": "html",
+        "jsonTotalPath": "totalChapters",
+        "method": "GET",
+        "pageSize": 200,
+        "urlTemplate": "{bookUrl}?ajax=chapters&page={page}&pageSize=200"
+      },
+      "reverse": false
+    },
+    "description": "div.inner",
+    "title": "h1.tit"
+  },
+  "chapter": {
+    "content": "div.txt"
+  }
+}
